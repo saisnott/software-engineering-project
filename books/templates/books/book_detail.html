@@ -1,0 +1,282 @@
+{% extends '_base.html' %}
+{% load book_tags %}
+
+{% block page_title %}
+  {{ book.title }} - Details
+{% endblock %}
+
+{% block content %}
+<style>
+  /* ── CUSTOM REFINEMENTS OVER BASE ── */
+  .book-detail-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+  }
+
+  .book-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+
+  .category-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    background: rgba(232, 168, 56, 0.1);
+    color: var(--accent2);
+    border: 1px solid rgba(232, 168, 56, 0.2);
+    padding: 6px 14px;
+    border-radius: 50px;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .category-badge:hover {
+    background: var(--accent2);
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .book-cover-img {
+    width: 100%;
+    max-width: 220px;
+    height: 300px;
+    object-fit: cover;
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .book-description {
+    color: var(--text-dim);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  .meta-item {
+    font-size: 14px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .meta-item strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .price-tag {
+    font-size: 26px;
+    font-weight: 700;
+    color: #27ae60;
+    display: inline-block;
+  }
+
+  /* ── COMMENTS DESIGN ── */
+  .comment-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  .comment-textarea {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+  }
+  .comment-textarea:focus {
+    border-color: var(--accent2);
+    outline: none;
+  }
+
+  /* ── Form Checkbox Style ── */
+  .form-check-input:checked {
+    background-color: var(--accent2);
+    border-color: var(--accent2);
+  }
+
+  .btn-custom-action {
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: transform 0.15s, opacity 0.2s;
+  }
+  .btn-custom-action:hover {
+    transform: translateY(-1px);
+    opacity: 0.95;
+  }
+</style>
+
+<div class="row g-4 justify-content-center">
+  <div class="col-lg-10">
+
+    <div class="book-detail-card mb-5">
+      <div class="row g-4 align-items-start">
+
+        <div class="col-md-4 text-center text-md-start">
+          {% if book.covers %}
+            <img src="{{ book.covers.url }}" alt="{{ book.title }}" class="book-cover-img">
+          {% else %}
+            <div class="book-cover-img d-flex align-items-center justify-content-center bg-dark text-muted m-auto">
+              <i class="bi bi-book" style="font-size: 4rem;"></i>
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-8">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+            <h1 class="book-title m-0">{{ book.title|capfirst }}</h1>
+
+            {% if book.category %}
+              <a href="{% url 'books:book_list' %}?category={{ book.category.slug }}" class="category-badge">
+                <i class="bi bi-folder-fill"></i> Category: {{ book.category.name }}
+              </a>
+            {% else %}
+              <span class="category-badge text-muted bg-transparent border-dashed" style="border: 1px dashed var(--border);">
+                <i class="bi bi-folder-x"></i> Uncategorized
+              </span>
+            {% endif %}
+          </div>
+
+          <div class="book-description mb-4">
+            {{ book.description|to_lowercase:"Description: "|linebreaks }}
+          </div>
+
+          <div class="row g-2 mb-4 border-top border-bottom py-3" style="border-color: var(--border) !important;">
+            <div class="col-sm-6">
+              <div class="meta-item"><i class="bi bi-person-fill me-2"></i>Author: <strong>{{ book.author }}</strong></div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-item"><i class="bi bi-person-badge me-2"></i>Registered by: <strong>{{ book.user.username }}</strong></div>
+            </div>
+          </div>
+
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 pt-2">
+            <div class="price-tag">${{ book.price }}</div>
+
+            <div class="d-flex gap-2">
+              {% if is_borrowed_by_user %}
+                <!-- اولویت اول: اگر کتاب دست خود این کاربر است، دکمه هدایت به داشبورد یا پس دادن مستقیم را نشان بده -->
+                <a href="{% url 'books:user_dashboard' %}" class="btn btn-warning btn-custom-action text-dark fw-bold" style="background: var(--accent2); border: none;">
+                  <i class="bi bi-arrow-counterclockwise"></i> You Borrowed This (Return via Dashboard)
+                </a>
+              {% elif book.is_available %}
+                <!-- اولویت دوم: اگر کتاب دست این کاربر نیست و کلا موجود است -->
+                <a href="{% url 'books:borrow_book' book.id %}" class="btn btn-success btn-custom-action text-white">
+                  <i class="bi bi-bookmark-plus-fill"></i> Borrow Book
+                </a>
+              {% else %}
+                <!-- اولویت سوم: کتاب موجود نیست و دست شخص دیگری است -->
+                <button class="btn btn-secondary btn-custom-action text-muted px-3" disabled style="background: var(--surface2); border: 1px solid var(--border);">
+                  <i class="bi bi-slash-circle-fill text-danger me-1"></i> Currently Loaned Out
+                </button>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if book.user == user %}
+            <div class="mt-4 pt-3 border-top d-flex gap-2 justify-content-end" style="border-color: var(--border) !important;">
+              <a href="{% url 'books:book_update' book.pk %}" class="btn btn-outline-primary btn-custom-action">
+                <i class="bi bi-pencil-square"></i> Edit
+              </a>
+              <a href="{% url 'books:book_delete' book.pk %}" class="btn btn-outline-danger btn-custom-action">
+                <i class="bi bi-trash3-fill"></i> Delete
+              </a>
+            </div>
+          {% endif %}
+
+        </div>
+      </div>
+    </div>
+
+
+    <div class="comments-container mb-5">
+      <h3 class="mb-4 h5 d-flex align-items-center gap-2">
+        <i class="bi bi-chat-left-text-fill text-warning"></i>
+        Discussion ({{ book.comments.count }})
+      </h3>
+
+      {% for comment in book.comments.all %}
+        <div class="comment-card">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <span class="text-info fw-medium fs-6">@{{ comment.user.username }}</span>
+            <span class="small text-muted"><i class="bi bi-clock me-1"></i>{{ comment.datetime_created|date:"Y-m-d H:i" }}</span>
+          </div>
+
+          <div class="mb-3">
+            {% if comment.does_recommend %}
+              <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1" style="font-size:11px;">
+                <i class="bi bi-hand-thumbs-up-fill me-1"></i> Recommends this book
+              </span>
+            {% else %}
+              <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1" style="font-size:11px;">
+                <i class="bi bi-hand-thumbs-down-fill me-1"></i> Does not recommend
+              </span>
+            {% endif %}
+          </div>
+
+          <div class="comment-text text-white-50 fs-6 ps-1">
+            {{ comment.text|linebreaks }}
+          </div>
+        </div>
+      {% empty %}
+        <div class="text-center p-5 rounded-3 mb-4" style="background: var(--surface2); border: 1px dashed var(--border);">
+          <i class="bi bi-chat-square-dots text-muted fs-2"></i>
+          <p class="text-muted mt-2 mb-0">No reviews shared yet. Be the first to start the conversation!</p>
+        </div>
+      {% endfor %}
+
+      {% if user.is_authenticated %}
+        <div class="comment-card mt-4 p-4">
+          <h4 class="h6 text-white mb-3"><i class="bi bi-pen me-2 text-warning"></i>Add a Comment</h4>
+          <form method="post" action="{% url 'books:book_detail' pk=book.pk %}">
+            {% csrf_token %}
+
+            <textarea name="text" rows="3" class="comment-textarea mb-3" placeholder="Write your transparent feedback or thoughts here..." required></textarea>
+
+            <div class="form-check mb-3">
+              <input type="checkbox" name="does_recommend" value="true" id="recommendCheck" class="form-check-input">
+              <label for="recommendCheck" class="form-check-label small text-white-50" style="cursor: pointer;">
+                I highly recommend this book to others
+              </label>
+            </div>
+
+            <button type="submit" class="btn btn-warning px-4 text-dark fw-bold btn-custom-action" style="background: var(--accent2); border:none;">
+              <i class="bi bi-send-fill"></i> Post Comment
+            </button>
+          </form>
+        </div>
+      {% else %}
+        <div class="text-center p-4 rounded-3 mt-4" style="background: rgba(192, 57, 43, 0.05); border: 1px solid rgba(192, 57, 43, 0.15);">
+          <p class="text-white-50 m-0">
+            Please <a href="{% url 'login' %}" style="color: var(--accent2); font-weight: 500;">Login</a> to share your review on this book.
+          </p>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="text-center">
+      <a href="{% url 'books:book_list' %}" class="link-secondary text-decoration-none d-inline-flex align-items-center gap-1" style="color: var(--text-dim);">
+        <i class="bi bi-arrow-left"></i> Back to Catalog
+      </a>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

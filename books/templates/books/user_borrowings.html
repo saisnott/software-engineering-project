@@ -1,0 +1,17 @@
+{% extends '_base.html' %} {# یا هر تمپلیت پدری که داری #}
+
+{% block content %}
+<h2>کتاب‌های در دست امانت شما</h2>
+<ul>
+    {% for borrowing in borrowings %}
+        <li>
+            <strong>{{ borrowing.book.title }}</strong> -
+            تاریخ امانت: {{ borrowing.borrow_date|date:"Y-m-d" }} |
+            مهلت بازگشت: {{ borrowing.due_date|date:"Y-m-d" }}
+            Status: ({{ borrowing.get_status_display }})
+        </li>
+    {% empty %}
+        <p>شما در حال حاضر هیچ کتابی به امانت نگرفته‌اید.</p>
+    {% endfor %}
+</ul>
+{% endblock %}
