@@ -19,7 +19,11 @@ import {
   Crown,
   Search,
   BookMarked,
-  History
+  History,
+  Megaphone,
+  Send,
+  Zap,
+  BellRing
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -42,6 +46,22 @@ export const ManagerDashboardPage = () => {
   const [loanFilter, setLoanFilter] = useState('all'); // 'all' | 'active' | 'returned' | 'late'
   const [loanSearch, setLoanSearch] = useState('');
   const [message, setMessage] = useState(null);
+
+  // Item #11: Quick In-Person Borrow
+  const [quickUserIdentifier, setQuickUserIdentifier] = useState('');
+  const [quickBookIdentifier, setQuickBookIdentifier] = useState('');
+  const [quickLoanDays, setQuickLoanDays] = useState('14');
+  const [submittingQuickLoan, setSubmittingQuickLoan] = useState(false);
+  const [quickLoanFeedback, setQuickLoanFeedback] = useState(null);
+
+  // Item #10: Admin / Staff Broadcast & Targeted Notifications
+  const [notifTargetType, setNotifTargetType] = useState('all'); // 'all' | 'overdue' | 'single'
+  const [notifTargetUser, setNotifTargetUser] = useState('');
+  const [notifCategory, setNotifCategory] = useState('info'); // 'info' | 'reminder'
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifMessage, setNotifMessage] = useState('');
+  const [sendingNotif, setSendingNotif] = useState(false);
+  const [notifFeedback, setNotifFeedback] = useState(null);
 
   // History Modal State (Book Circulation / User Dossier)
   const [historyModalLoading, setHistoryModalLoading] = useState(false);
@@ -124,6 +144,96 @@ export const ManagerDashboardPage = () => {
       return () => dialog.removeEventListener('click', handleDialogClick);
     }
   }, [loading]);
+
+  const handleQuickBorrow = async (e) => {
+    e.preventDefault();
+    if (!quickUserIdentifier || !quickBookIdentifier) return;
+    const parsedDays = parseInt(quickLoanDays, 10);
+    if (!parsedDays || parsedDays < 1) {
+      setQuickLoanFeedback({ type: 'danger', text: 'لطفاً مدت امانت معتبر (حداقل ۱ روز) وارد کنید.' });
+      return;
+    }
+    setSubmittingQuickLoan(true);
+    setQuickLoanFeedback(null);
+    setMessage(null);
+    try {
+      const res = await api.post('/api/manager/quick-borrow/', {
+        user_identifier: quickUserIdentifier,
+        book_identifier: quickBookIdentifier,
+        days: parsedDays,
+      });
+      setQuickLoanFeedback({ type: 'success', text: res.data.message });
+      showToast(res.data.message, 'success');
+      setQuickBookIdentifier('');
+      await fetchStats();
+      await refreshNotifications();
+      if (isSuperuser) await fetchUsers(userSearch);
+    } catch (err) {
+      const errMsg = err.response?.data?.error || 'خطا در ثبت سریع امانت حضوری.';
+      setQuickLoanFeedback({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setSubmittingQuickLoan(false);
+    }
+  };
+
+  const handleApplyNotifPreset = (presetKey) => {
+    setNotifFeedback(null);
+    if (presetKey === 'overdue') {
+      setNotifTargetType('overdue');
+      setNotifCategory('reminder');
+      setNotifTitle('یادآوری بازگشت کتاب‌های دارای تأخیر');
+      setNotifMessage('عضو گرامی، مهلت قانونی امانت کتاب شما به پایان رسیده است. لطفاً جهت جلوگیری از محدودیت امانت‌گیری و استفاده سایر اعضا، کتاب را به کتابخانه تحویل فرمایید.');
+    } else if (presetKey === 'new_books') {
+      setNotifTargetType('all');
+      setNotifCategory('info');
+      setNotifTitle('اطلاعیه افزوده شدن عناوین جدید به مخزن کتابخانه');
+      setNotifMessage('به اطلاع تمامی اعضای کتابخانه می‌رساند مجموعه جدیدی از کتاب‌های منتخب به مخزن اضافه شده و هم‌اکنون از طریق کاتالوگ آنلاین یا مراجعه حضوری آماده امانت‌گیری است.');
+    } else if (presetKey === 'hours') {
+      setNotifTargetType('all');
+      setNotifCategory('info');
+      setNotifTitle('اطلاعیه ساعت کاری میز امانت کتابخانه');
+      setNotifMessage('اعضای گرامی، میز امانت و تحویل کتاب همه‌روزه از ساعت ۸ الی ۲۰ آماده خدمات‌رسانی حضوری به شما عزیزان است.');
+    }
+  };
+
+  const handleSendNotification = async (e) => {
+    e.preventDefault();
+    if (!notifTitle.trim() || !notifMessage.trim()) return;
+    if (notifTargetType === 'single' && !notifTargetUser) {
+      setNotifFeedback({ type: 'danger', text: 'لطفاً عضو مورد نظر را از لیست انتخاب کنید.' });
+      return;
+    }
+
+    setSendingNotif(true);
+    setNotifFeedback(null);
+    setMessage(null);
+    try {
+      const res = await api.post('/api/manager/notifications/send/', {
+        target_type: notifTargetType,
+        user_identifier: notifTargetType === 'single' ? notifTargetUser : undefined,
+        notif_type: notifCategory,
+        title: notifTitle.trim(),
+        message: notifMessage.trim(),
+        link: '/dashboard'
+      });
+      setNotifFeedback({
+        type: 'success',
+        text: `${res.data.message} (${(res.data.recipients || []).join('، ')})`
+      });
+      showToast(res.data.message, 'success');
+      setNotifTitle('');
+      setNotifMessage('');
+      await fetchStats();
+      await refreshNotifications();
+    } catch (err) {
+      const errMsg = err.response?.data?.error || 'خطا در ارسال اطلاعیه.';
+      setNotifFeedback({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setSendingNotif(false);
+    }
+  };
 
   const openBookHistoryModal = async (bookId, bookTitle) => {
     setHistoryModalData({
@@ -273,8 +383,8 @@ export const ManagerDashboardPage = () => {
       roleValue === 'superuser'
         ? { is_staff: true, is_superuser: true }
         : roleValue === 'staff'
-        ? { is_staff: true, is_superuser: false }
-        : { is_staff: false, is_superuser: false };
+          ? { is_staff: true, is_superuser: false }
+          : { is_staff: false, is_superuser: false };
 
     try {
       await api.patch(`/api/auth/users/${targetUser.id}/`, payload);
@@ -345,8 +455,14 @@ export const ManagerDashboardPage = () => {
     recent_books = [],
     active_borrowings = [],
     all_borrowings = [],
-    categories = []
+    categories = [],
+    members_directory = [],
+    books_directory = [],
+    recent_broadcasts = []
   } = stats || {};
+
+  const availableBooksDirectory = books_directory.filter((b) => b.is_available);
+  const overdueMembersCount = members_directory.filter((m) => m.has_overdue).length;
 
   const availablePercent = total_books > 0 ? Math.round((available_count / total_books) * 100) : 0;
   const borrowedPercent = total_books > 0 ? 100 - availablePercent : 0;
@@ -618,6 +734,320 @@ export const ManagerDashboardPage = () => {
         </div>
       </div>
 
+      {/* 1.5. Smart Operations Row: Item #11 (Quick In-Person Loan) & Item #10 (Broadcast / Targeted Notifications) */}
+      <div className="form-grid-2" style={{ gap: '22px', marginBottom: '44px', alignItems: 'start' }}>
+        {/* Card A (Item #11): Staff Quick In-Person Borrow Desk */}
+        <div className="card" style={{ padding: '26px', border: '1px solid rgba(232, 168, 56, 0.32)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
+            <h2 style={{ fontSize: '19px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <BookCheck size={21} color="var(--accent2)" />
+              ثبت سریع امانت حضوری
+            </h2>
+            <span className="badge badge-available" style={{ fontSize: '11.5px' }}>
+              <Zap size={12} /> میز امانت سریع
+            </span>
+          </div>
+          <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '18px' }}>
+            عضو مورد نظر و کتاب موجود در قفسه را از لیست انتخاب کرده و مدت امانت را به روز وارد کنید تا کتاب فوراً به نام عضو ثبت شود.
+          </p>
+
+          {quickLoanFeedback && (
+            <div role="status" className={`alert alert-${quickLoanFeedback.type}`} style={{ marginBottom: '16px', fontSize: '13px' }}>
+              {quickLoanFeedback.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+              <span>{quickLoanFeedback.text}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleQuickBorrow}>
+            <div className="form-group">
+              <label className="form-label" htmlFor="quick-user-select">
+                انتخاب عضو *
+              </label>
+              <select
+                id="quick-user-select"
+                className="form-control"
+                value={quickUserIdentifier}
+                onChange={(e) => setQuickUserIdentifier(e.target.value)}
+                required
+              >
+                <option value="">-- انتخاب عضو از لیست --</option>
+                {members_directory.map((m) => (
+                  <option key={m.id} value={m.username} dir="ltr">
+                    {`${m.username} - ${m.active_loans_count} active loans`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="quick-book-select">
+                انتخاب کتاب موجود در قفسه *
+              </label>
+              <select
+                id="quick-book-select"
+                className="form-control"
+                value={quickBookIdentifier}
+                onChange={(e) => setQuickBookIdentifier(e.target.value)}
+                required
+              >
+                <option value="">-- انتخاب کتاب از لیست موجودی --</option>
+                {availableBooksDirectory.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {`${b.title} — اثر ${b.author}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="quick-loan-days-input">
+                مدت امانت *
+              </label>
+              <input
+                id="quick-loan-days-input"
+                type="number"
+                min="1"
+                max="365"
+                className="form-control"
+                placeholder="تعداد روز (مثلاً ۱۴)"
+                value={quickLoanDays}
+                onChange={(e) => setQuickLoanDays(e.target.value)}
+                dir="ltr"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={submittingQuickLoan}
+              className="btn-primary"
+              style={{ width: '100%', padding: '11px 18px' }}
+            >
+              <BookCheck size={17} />
+              {submittingQuickLoan ? 'در حال ثبت در سیستم...' : 'ثبت فوری امانت حضوری'}
+            </button>
+          </form>
+        </div>
+
+        {/* Card B (Item #10): Broadcast & Targeted Notification Center */}
+        <div className="card" style={{ padding: '26px', border: '1px solid rgba(232, 168, 56, 0.32)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
+            <h2 style={{ fontSize: '19px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Megaphone size={21} color="var(--accent2)" />
+              ارسال اطلاعیه عمومی و اخطار به اعضا
+            </h2>
+            <span className="badge badge-category" style={{ fontSize: '11.5px' }}>
+              <BellRing size={12} /> پنل پیام‌رسان
+            </span>
+          </div>
+          <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '12px' }}>
+            ارسال آنی اطلاعیه به زنگوله اعلان‌های تمام اعضا، اعضای دارای تأخیر در تحویل کتاب، یا یک کاربر مشخص.
+          </p>
+
+          {/* Quick Presets Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px' }}>
+            <span style={{ fontSize: '11.5px', color: 'var(--muted)' }}>الگوهای آماده:</span>
+            <button
+              type="button"
+              className="btn-outline"
+              style={{ padding: '4px 10px', fontSize: '11.5px' }}
+              onClick={() => handleApplyNotifPreset('overdue')}
+            >
+              هشدار معوقه‌ها
+            </button>
+            <button
+              type="button"
+              className="btn-outline"
+              style={{ padding: '4px 10px', fontSize: '11.5px' }}
+              onClick={() => handleApplyNotifPreset('new_books')}
+            >
+              کتاب‌های جدید
+            </button>
+            <button
+              type="button"
+              className="btn-outline"
+              style={{ padding: '4px 10px', fontSize: '11.5px' }}
+              onClick={() => handleApplyNotifPreset('hours')}
+            >
+              ساعت کاری میز امانت
+            </button>
+          </div>
+
+          {notifFeedback && (
+            <div role="status" className={`alert alert-${notifFeedback.type}`} style={{ marginBottom: '16px', fontSize: '13px' }}>
+              {notifFeedback.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+              <span>{notifFeedback.text}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSendNotification}>
+            {/* Target Audience Radio Group (<fieldset> + <legend>) */}
+            <fieldset className="form-fieldset">
+              <legend className="form-legend">مخاطبان دریافت‌کننده اعلان</legend>
+              <div className="radio-options-row">
+                <label className="radio-option-card">
+                  <input
+                    type="radio"
+                    name="notifTargetType"
+                    value="all"
+                    checked={notifTargetType === 'all'}
+                    onChange={(e) => setNotifTargetType(e.target.value)}
+                  />
+                  <span>همه اعضای فعال ({toPersianDigits(members_directory.length)} نفر)</span>
+                </label>
+
+                <label className="radio-option-card">
+                  <input
+                    type="radio"
+                    name="notifTargetType"
+                    value="overdue"
+                    checked={notifTargetType === 'overdue'}
+                    onChange={(e) => setNotifTargetType(e.target.value)}
+                  />
+                  <span>دارای تأخیر ({toPersianDigits(overdueMembersCount)} نفر)</span>
+                </label>
+
+                <label className="radio-option-card">
+                  <input
+                    type="radio"
+                    name="notifTargetType"
+                    value="single"
+                    checked={notifTargetType === 'single'}
+                    onChange={(e) => setNotifTargetType(e.target.value)}
+                  />
+                  <span>یک عضو مشخص</span>
+                </label>
+              </div>
+            </fieldset>
+
+            {notifTargetType === 'single' && (
+              <div className="form-group">
+                <label className="form-label" htmlFor="notif-single-user-select">
+                  انتخاب عضو مخاطب *
+                </label>
+                <select
+                  id="notif-single-user-select"
+                  className="form-control"
+                  value={notifTargetUser}
+                  onChange={(e) => setNotifTargetUser(e.target.value)}
+                  required
+                >
+                  <option value="">-- انتخاب عضو از لیست --</option>
+                  {members_directory.map((m) => (
+                    <option key={m.id} value={m.username} dir="ltr">
+                      {m.username}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Notification Type Radio Group (<fieldset> + <legend>) */}
+            <fieldset className="form-fieldset">
+              <legend className="form-legend">نوع و اولویت پیام</legend>
+              <div className="radio-options-row">
+                <label className="radio-option-card">
+                  <input
+                    type="radio"
+                    name="notifCategory"
+                    value="info"
+                    checked={notifCategory === 'info'}
+                    onChange={(e) => setNotifCategory(e.target.value)}
+                  />
+                  <span>اطلاعیه عمومی / خبری</span>
+                </label>
+
+                <label className="radio-option-card">
+                  <input
+                    type="radio"
+                    name="notifCategory"
+                    value="reminder"
+                    checked={notifCategory === 'reminder'}
+                    onChange={(e) => setNotifCategory(e.target.value)}
+                  />
+                  <span>اخطار / یادآوری موعد بازگشت</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div className="form-group" style={{ marginBottom: '12px' }}>
+              <label className="form-label" htmlFor="notif-title-input">
+                عنوان اطلاعیه یا هشدار *
+              </label>
+              <input
+                id="notif-title-input"
+                type="text"
+                className="form-control"
+                placeholder="مثلاً: اطلاعیه افزوده شدن کتاب‌های جدید"
+                value={notifTitle}
+                onChange={(e) => setNotifTitle(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="notif-message-input">
+                متن کامل پیام *
+              </label>
+              <textarea
+                id="notif-message-input"
+                className="form-control"
+                rows={3}
+                placeholder="متن پیام یا اخطار خود را برای نمایش در پنل کاربری اعضا بنویسید..."
+                value={notifMessage}
+                onChange={(e) => setNotifMessage(e.target.value)}
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={sendingNotif}
+              className="btn-primary"
+              style={{ width: '100%', padding: '11px 18px' }}
+            >
+              <Send size={16} />
+              {sendingNotif ? 'در حال ارسال اعلان...' : 'ارسال آنی اطلاعیه به مخاطبان'}
+            </button>
+          </form>
+
+          {/* Recent Sent Notifications Mini Log */}
+          {recent_broadcasts.length > 0 && (
+            <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-dim)', marginBottom: '8px' }}>
+                آخرین اعلان‌های ثبت‌شده در سامانه:
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '145px', overflowY: 'auto' }}>
+                {recent_broadcasts.slice(0, 4).map((nb) => (
+                  <div
+                    key={nb.id}
+                    style={{
+                      fontSize: '12px',
+                      background: 'var(--surface2)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '7px 10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px'
+                    }}
+                  >
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong style={{ color: 'var(--accent2)' }}>@{nb.recipient_username}</strong>:{' '}
+                      <span>{nb.title}</span>
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--muted)', flexShrink: 0 }}>
+                      {formatPersianDate(nb.created_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* 2. SUPERUSER-ONLY: User Management Section */}
       {isSuperuser && (
         <div className="card" style={{ padding: '28px', marginBottom: '44px', border: '1px solid rgba(232, 168, 56, 0.35)' }}>
@@ -782,8 +1212,8 @@ export const ManagerDashboardPage = () => {
                     const currentRoleValue = u.is_superuser
                       ? 'superuser'
                       : u.is_staff
-                      ? 'staff'
-                      : 'user';
+                        ? 'staff'
+                        : 'user';
 
                     return (
                       <tr key={u.id}>

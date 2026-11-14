@@ -34,6 +34,7 @@ class CommentSerializer(serializers.ModelSerializer):
 
 
 class BookListSerializer(serializers.ModelSerializer):
+    book_code = serializers.SerializerMethodField()
     category_name = serializers.ReadOnlyField(source='category.name')
     category_slug = serializers.ReadOnlyField(source='category.slug')
     comments_count = serializers.SerializerMethodField()
@@ -46,12 +47,15 @@ class BookListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
         fields = [
-            'id', 'title', 'author', 'price', 'covers', 'is_available',
+            'id', 'book_code', 'title', 'author', 'price', 'covers', 'is_available',
             'category', 'category_name', 'category_slug', 'comments_count',
             'average_rating', 'user', 'author_username', 'is_wishlisted',
             'current_borrower', 'total_borrows_count'
         ]
-        read_only_fields = ['id', 'user', 'is_available']
+        read_only_fields = ['id', 'book_code', 'user', 'is_available']
+
+    def get_book_code(self, obj):
+        return f"LIB-B{obj.id:04d}"
 
     def get_comments_count(self, obj):
         return obj.comments.filter(is_active=True).count()
@@ -138,6 +142,8 @@ class BorrowingSerializer(serializers.ModelSerializer):
 
 
 class BookDetailSerializer(serializers.ModelSerializer):
+    book_code = serializers.SerializerMethodField()
+    qr_payload = serializers.SerializerMethodField()
     category_details = CategorySerializer(source='category', read_only=True)
     comments = serializers.SerializerMethodField()
     average_rating = serializers.SerializerMethodField()
@@ -155,14 +161,20 @@ class BookDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
         fields = [
-            'id', 'title', 'author', 'description', 'price', 'covers',
+            'id', 'book_code', 'qr_payload', 'title', 'author', 'description', 'price', 'covers',
             'is_available', 'category', 'category_details', 'user',
             'author_username', 'comments', 'average_rating', 'ratings_count',
             'is_borrowed_by_user', 'is_wishlisted', 'is_reserved_by_user',
             'waitlist_count', 'related_books', 'current_borrower',
             'total_borrows_count', 'borrowing_history'
         ]
-        read_only_fields = ['id', 'user', 'is_available']
+        read_only_fields = ['id', 'book_code', 'qr_payload', 'user', 'is_available']
+
+    def get_book_code(self, obj):
+        return f"LIB-B{obj.id:04d}"
+
+    def get_qr_payload(self, obj):
+        return f"BOOKSTORE-BOOK:LIB-B{obj.id:04d}|ID:{obj.id}"
 
     def validate_price(self, value):
         if value < 0:

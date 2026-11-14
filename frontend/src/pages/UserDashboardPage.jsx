@@ -140,9 +140,9 @@ export const UserDashboardPage = () => {
       setDashboardData((prev) =>
         prev
           ? {
-              ...prev,
-              wishlist: (prev.wishlist || []).filter((b) => b.id !== bookId),
-            }
+            ...prev,
+            wishlist: (prev.wishlist || []).filter((b) => b.id !== bookId),
+          }
           : prev
       );
     }

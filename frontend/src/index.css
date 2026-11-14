@@ -1284,6 +1284,95 @@ dialog::backdrop {
   backdrop-filter: blur(4px);
 }
 
+/* ── Fieldset, Legend & Radio Pill Controls (modern-web-guidance forms) ── */
+.form-fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: var(--surface2);
+}
+
+.form-legend {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 0 8px;
+}
+
+.radio-options-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.radio-option-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s, color 0.2s;
+}
+
+.radio-option-card:hover {
+  border-color: var(--accent2);
+  color: var(--text);
+}
+
+.radio-option-card:has(input[type="radio"]:checked) {
+  border-color: var(--accent2);
+  background: var(--accent-soft);
+  color: var(--accent2);
+  box-shadow: 0 2px 10px rgba(200, 122, 18, 0.14);
+}
+
+/* ── Digital Membership Card & QR Code Badges ── */
+.member-card-pass {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(232, 168, 56, 0.35);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface2) 100%);
+  padding: 24px 26px;
+  box-shadow: var(--shadow);
+}
+
+.member-card-pass::before {
+  content: '';
+  position: absolute;
+  top: -60px;
+  left: -60px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(232, 168, 56, 0.16) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.code-mono-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  direction: ltr;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border-strong);
+  color: var(--accent2);
+}
+
 /* ── Activity Timeline (RTL) ── */
 .activity-timeline {
   position: relative;

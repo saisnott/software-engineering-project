@@ -1,4 +1,7 @@
+import re
 from datetime import timedelta
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Avg, F, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -16,6 +19,66 @@ from .serializers import (
     CommentSerializer,
     NotificationSerializer,
 )
+
+User = get_user_model()
+
+
+def resolve_user_from_identifier(raw_identifier):
+    """
+    Resolves a user from:
+    - QR payload: 'BOOKSTORE-MEMBER:LIB-U0008|USER:majid'
+    - Member code: 'LIB-U0008' or 'LIB-USER-0008' or 'U0008'
+    - Username: 'majid' or '@majid'
+    - Numeric ID: '8'
+    """
+    if raw_identifier is None:
+        return None
+    text = str(raw_identifier).strip()
+    if not text:
+        return None
+
+    # Check QR payload or LIB-Uxxxx code
+    m_code = re.search(r'LIB-U(?:SER-)?0*(\d+)', text, re.IGNORECASE)
+    if m_code:
+        uid = int(m_code.group(1))
+        return User.objects.filter(id=uid).first()
+
+    if text.isdigit():
+        return User.objects.filter(id=int(text)).first()
+
+    clean_username = text.lstrip('@').strip()
+    user = User.objects.filter(username__iexact=clean_username).first()
+    if user:
+        return user
+    return None
+
+
+def resolve_book_from_identifier(raw_identifier):
+    """
+    Resolves a book from:
+    - QR payload: 'BOOKSTORE-BOOK:LIB-B0001|ID:1'
+    - Book code: 'LIB-B0001' or 'LIB-BOOK-0001'
+    - Numeric ID: '1'
+    - Exact or partial title
+    """
+    if raw_identifier is None:
+        return None
+    text = str(raw_identifier).strip()
+    if not text:
+        return None
+
+    m_code = re.search(r'LIB-B(?:OOK-)?0*(\d+)', text, re.IGNORECASE)
+    if m_code:
+        bid = int(m_code.group(1))
+        return Book.objects.filter(id=bid).first()
+
+    if text.isdigit():
+        return Book.objects.filter(id=int(text)).first()
+
+    book = Book.objects.filter(title__iexact=text).first()
+    if book:
+        return book
+    return Book.objects.filter(title__icontains=text).first()
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -405,7 +468,28 @@ class UserDashboardAPIView(APIView):
 
         activity_timeline.sort(key=lambda item: item['timestamp'], reverse=True)
 
+        user_obj = request.user
+        full_name = f"{user_obj.first_name} {user_obj.last_name}".strip() or user_obj.username
+        member_code = f"LIB-U{user_obj.id:04d}"
+        role_label = (
+            "مدیر ارشد کتابخانه" if user_obj.is_superuser
+            else ("کارمند کتابخانه" if user_obj.is_staff else "عضو رسمی کتابخانه")
+        )
+
         return Response({
+            'member_card': {
+                'member_code': member_code,
+                'username': user_obj.username,
+                'full_name': full_name,
+                'email': user_obj.email or '',
+                'age': user_obj.age,
+                'role_label': role_label,
+                'date_joined': user_obj.date_joined,
+                'active_loans_count': len(current_borrowings),
+                'total_returned': total_returned,
+                'on_time_rate': on_time_rate,
+                'qr_payload': f"BOOKSTORE-MEMBER:{member_code}|USER:{user_obj.username}",
+            },
             'current_borrowings': BorrowingSerializer(current_borrowings, many=True, context={'request': request}).data,
             'borrowing_history': BorrowingSerializer(borrowing_history, many=True, context={'request': request}).data,
             'wishlist': BookListSerializer(wishlist_books, many=True, context={'request': request}).data,
@@ -498,6 +582,7 @@ class LibraryManagerStatsAPIView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
+        now = timezone.now()
         total_books = Book.objects.count()
         borrowed_count = Book.objects.filter(is_available=False).count()
         available_count = total_books - borrowed_count
@@ -505,11 +590,68 @@ class LibraryManagerStatsAPIView(APIView):
         categories_count = categories.count()
         recent_books = Book.objects.select_related('category', 'user').order_by('-id')[:20]
 
-        active_borrowings = Borrowing.objects.filter(
-            return_date__isnull=True
-        ).select_related('book', 'user', 'returned_by').order_by('due_date')
+        active_borrowings = list(
+            Borrowing.objects.filter(return_date__isnull=True)
+            .select_related('book', 'user', 'returned_by')
+            .order_by('due_date')
+        )
 
         all_borrowings = Borrowing.objects.select_related('book', 'user', 'returned_by').order_by('-borrow_date')[:100]
+
+        # Build lightweight member directory for Staff & Superuser Quick Loan + Broadcast
+        active_loans_by_user = {}
+        overdue_users_set = set()
+        for ab in active_borrowings:
+            active_loans_by_user[ab.user_id] = active_loans_by_user.get(ab.user_id, 0) + 1
+            if ab.due_date and ab.due_date < now:
+                overdue_users_set.add(ab.user_id)
+
+        members_qs = User.objects.filter(is_active=True).order_by('username')
+        members_directory = []
+        for u in members_qs:
+            full_name = f"{u.first_name} {u.last_name}".strip() or u.username
+            m_code = f"LIB-U{u.id:04d}"
+            members_directory.append({
+                'id': u.id,
+                'username': u.username,
+                'full_name': full_name,
+                'email': u.email or '',
+                'member_code': m_code,
+                'qr_payload': f"BOOKSTORE-MEMBER:{m_code}|USER:{u.username}",
+                'is_staff': u.is_staff,
+                'is_superuser': u.is_superuser,
+                'active_loans_count': active_loans_by_user.get(u.id, 0),
+                'has_overdue': u.id in overdue_users_set,
+            })
+
+        books_qs = Book.objects.select_related('category').order_by('-is_available', 'title')
+        books_directory = [
+            {
+                'id': b.id,
+                'book_code': f"LIB-B{b.id:04d}",
+                'qr_payload': f"BOOKSTORE-BOOK:LIB-B{b.id:04d}|ID:{b.id}",
+                'title': b.title,
+                'author': b.author,
+                'is_available': b.is_available,
+                'category_name': b.category.name if b.category else 'بدون دسته',
+            }
+            for b in books_qs
+        ]
+
+        recent_notifs = Notification.objects.select_related('user').order_by('-created_at')[:10]
+        recent_broadcasts = [
+            {
+                'id': n.id,
+                'recipient_username': n.user.username if n.user else '',
+                'recipient_code': f"LIB-U{n.user_id:04d}" if n.user_id else '',
+                'title': n.title,
+                'message': n.message,
+                'notif_type': n.notif_type,
+                'is_read': n.is_read,
+                'created_at': n.created_at,
+            }
+            for n in recent_notifs
+        ]
 
         return Response({
             'total_books': total_books,
@@ -520,7 +662,190 @@ class LibraryManagerStatsAPIView(APIView):
             'active_borrowings': BorrowingSerializer(active_borrowings, many=True, context={'request': request}).data,
             'all_borrowings': BorrowingSerializer(all_borrowings, many=True, context={'request': request}).data,
             'categories': CategorySerializer(categories, many=True).data,
+            'members_directory': members_directory,
+            'books_directory': books_directory,
+            'recent_broadcasts': recent_broadcasts,
         })
+
+
+class ManagerSendNotificationAPIView(APIView):
+    """
+    Allows Admin (superuser) or Staff to send notifications:
+    - target_type == 'all': broadcast to all active users
+    - target_type == 'overdue': reminder to users who currently hold overdue books
+    - target_type == 'single': direct notification to a specific user (by ID, username, or LIB-Uxxxx)
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        target_type = str(request.data.get('target_type', 'all')).strip()
+        notif_type = str(request.data.get('notif_type', 'info')).strip()
+        if notif_type not in ('info', 'reminder'):
+            notif_type = 'info'
+
+        title = str(request.data.get('title', '')).strip()
+        message = str(request.data.get('message', '')).strip()
+        link = str(request.data.get('link', '/dashboard')).strip() or '/dashboard'
+
+        if not title or not message:
+            return Response(
+                {'error': 'لطفاً عنوان و متن پیام اطلاعیه را وارد کنید.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        now = timezone.now()
+        target_users = []
+
+        if target_type == 'all':
+            target_users = list(User.objects.filter(is_active=True).order_by('id'))
+            if not target_users:
+                return Response(
+                    {'error': 'هیچ کاربر فعالی در سامانه یافت نشد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        elif target_type == 'overdue':
+            overdue_user_ids = (
+                Borrowing.objects.filter(return_date__isnull=True, due_date__lt=now)
+                .values_list('user_id', flat=True)
+                .distinct()
+            )
+            target_users = list(User.objects.filter(id__in=overdue_user_ids, is_active=True).order_by('id'))
+            if not target_users:
+                return Response(
+                    {'error': 'در حال حاضر هیچ کاربری دارای کتاب معوقه (تأخیردار) نیست.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        elif target_type == 'single':
+            user_identifier = request.data.get('user_identifier') or request.data.get('user_id')
+            resolved = resolve_user_from_identifier(user_identifier)
+            if not resolved:
+                return Response(
+                    {'error': 'کاربر مورد نظر با این شناسه، کد عضویت یا نام کاربری یافت نشد.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            target_users = [resolved]
+        else:
+            return Response(
+                {'error': 'نوع مخاطب نامعتبر است.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        sender_label = "مدیر ارشد" if request.user.is_superuser else "کارمند کتابخانه"
+        formatted_title = title
+        formatted_message = f"{message}\n(ارسال‌شده توسط {sender_label}: @{request.user.username})"
+
+        notifications_to_create = [
+            Notification(
+                user=u,
+                title=formatted_title,
+                message=formatted_message,
+                notif_type=notif_type,
+                link=link,
+            )
+            for u in target_users
+        ]
+        Notification.objects.bulk_create(notifications_to_create)
+
+        recipient_names = [f"@{u.username}" for u in target_users]
+        return Response(
+            {
+                'message': f'پیام «{title}» با موفقیت برای {len(target_users)} کاربر ارسال شد.',
+                'recipients_count': len(target_users),
+                'recipients': recipient_names,
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class StaffQuickBorrowAPIView(APIView):
+    """
+    Allows Admin or Staff to quickly register an in-person book loan for a member
+    using their Member Code (LIB-Uxxxx / QR payload / username) and Book Code (LIB-Bxxxx / QR payload / ID).
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        user_identifier = request.data.get('user_identifier')
+        book_identifier = request.data.get('book_identifier')
+        raw_days = request.data.get('days', 14)
+
+        try:
+            days = int(raw_days)
+            if days < 1 or days > 365:
+                days = 14
+        except (TypeError, ValueError):
+            days = 14
+
+        if not user_identifier or not book_identifier:
+            return Response(
+                {'error': 'لطفاً عضو و کتاب مورد نظر را از لیست انتخاب کنید.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        target_user = resolve_user_from_identifier(user_identifier)
+        if not target_user:
+            return Response(
+                {'error': 'کاربر مورد نظر یافت نشد.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not target_user.is_active:
+            return Response(
+                {'error': f'حساب کاربری @{target_user.username} غیرفعال است و امکان ثبت امانت ندارد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        resolved_book = resolve_book_from_identifier(book_identifier)
+        if not resolved_book:
+            return Response(
+                {'error': 'کتاب مورد نظر در مخزن یافت نشد.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        with transaction.atomic():
+            book = Book.objects.select_for_update().get(pk=resolved_book.pk)
+            active_loan = Borrowing.objects.filter(book=book, return_date__isnull=True).select_related('user').first()
+            if not book.is_available or active_loan:
+                holder = f"@{active_loan.user.username}" if active_loan and active_loan.user else "کاربر دیگر"
+                return Response(
+                    {'error': f'کتاب «{book.title}» هم‌اکنون در امانت {holder} است و در قفسه موجود نیست.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            due_date = timezone.now() + timedelta(days=days)
+            borrowing = Borrowing.objects.create(
+                user=target_user,
+                book=book,
+                due_date=due_date,
+                status='borrowed'
+            )
+            book.is_available = False
+            book.save(update_fields=['is_available'])
+
+            if book.waitlist.filter(id=target_user.id).exists():
+                book.waitlist.remove(target_user)
+
+            Notification.objects.create(
+                user=target_user,
+                title=f"ثبت امانت حضوری: «{book.title}»",
+                message=(
+                    f"کتاب «{book.title}» توسط مسئول میز امانت (@{request.user.username}) "
+                    f"به مدت {days} روز برای شما ثبت شد."
+                ),
+                notif_type='borrow',
+                link='/dashboard'
+            )
+
+        return Response(
+            {
+                'message': (
+                    f"امانت حضوری کتاب «{book.title}» برای کاربر @{target_user.username} "
+                    f"به مدت {days} روز با موفقیت ثبت شد."
+                ),
+                'borrowing': BorrowingSerializer(borrowing, context={'request': request}).data,
+            },
+            status=status.HTTP_201_CREATED
+        )
 
 
 class NotificationListAPIView(APIView):

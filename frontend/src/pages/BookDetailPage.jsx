@@ -129,10 +129,10 @@ export const BookDetailPage = () => {
       setBook((prev) =>
         prev
           ? {
-              ...prev,
-              is_reserved_by_user: res.data.is_reserved_by_user,
-              waitlist_count: res.data.waitlist_count,
-            }
+            ...prev,
+            is_reserved_by_user: res.data.is_reserved_by_user,
+            waitlist_count: res.data.waitlist_count,
+          }
           : prev
       );
       setMessage({ type: 'success', text: res.data.message });

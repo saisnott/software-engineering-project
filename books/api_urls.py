@@ -9,9 +9,11 @@ from .api_views import (
     CommentCreateAPIView,
     ExtendBorrowingAPIView,
     LibraryManagerStatsAPIView,
+    ManagerSendNotificationAPIView,
     NotificationListAPIView,
     NotificationMarkReadAPIView,
     ReturnBookAPIView,
+    StaffQuickBorrowAPIView,
     ToggleReservationAPIView,
     ToggleWishlistAPIView,
     UserDashboardAPIView,
@@ -35,4 +37,6 @@ urlpatterns = [
     path('notifications/mark-read/', NotificationMarkReadAPIView.as_view(), name='api_notifications_mark_read'),
     path('dashboard/', UserDashboardAPIView.as_view(), name='api_user_dashboard'),
     path('manager/stats/', LibraryManagerStatsAPIView.as_view(), name='api_manager_stats'),
+    path('manager/notifications/send/', ManagerSendNotificationAPIView.as_view(), name='api_manager_send_notification'),
+    path('manager/quick-borrow/', StaffQuickBorrowAPIView.as_view(), name='api_staff_quick_borrow'),
 ]
