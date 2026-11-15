@@ -738,7 +738,7 @@ export const ManagerDashboardPage = () => {
       <div className="form-grid-2" style={{ gap: '22px', marginBottom: '44px', alignItems: 'start' }}>
         {/* Card A (Item #11): Staff Quick In-Person Borrow Desk */}
         <div className="card" style={{ padding: '26px', border: '1px solid rgba(232, 168, 56, 0.32)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <BookCheck size={21} color="var(--accent2)" />
               ثبت سریع امانت حضوری
@@ -747,9 +747,6 @@ export const ManagerDashboardPage = () => {
               <Zap size={12} /> میز امانت سریع
             </span>
           </div>
-          <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '18px' }}>
-            عضو مورد نظر و کتاب موجود در قفسه را از لیست انتخاب کرده و مدت امانت را به روز وارد کنید تا کتاب فوراً به نام عضو ثبت شود.
-          </p>
 
           {quickLoanFeedback && (
             <div role="status" className={`alert alert-${quickLoanFeedback.type}`} style={{ marginBottom: '16px', fontSize: '13px' }}>
@@ -831,7 +828,7 @@ export const ManagerDashboardPage = () => {
 
         {/* Card B (Item #10): Broadcast & Targeted Notification Center */}
         <div className="card" style={{ padding: '26px', border: '1px solid rgba(232, 168, 56, 0.32)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Megaphone size={21} color="var(--accent2)" />
               ارسال اطلاعیه عمومی و اخطار به اعضا
@@ -840,9 +837,6 @@ export const ManagerDashboardPage = () => {
               <BellRing size={12} /> پنل پیام‌رسان
             </span>
           </div>
-          <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '12px' }}>
-            ارسال آنی اطلاعیه به زنگوله اعلان‌های تمام اعضا، اعضای دارای تأخیر در تحویل کتاب، یا یک کاربر مشخص.
-          </p>
 
           {/* Quick Presets Bar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px' }}>
@@ -1055,11 +1049,8 @@ export const ManagerDashboardPage = () => {
             <div>
               <h2 style={{ fontSize: '20px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Crown size={22} color="var(--accent2)" />
-                مدیریت کاربران و سطوح دسترسی ({toPersianDigits(usersList.length)} کاربر)
+                مدیریت کاربران و سطوح دسترسی
               </h2>
-              <p style={{ color: 'var(--muted)', fontSize: '13px', marginTop: '2px' }}>
-                این بخش صرفاً برای مدیر ارشد (Superuser) قابل مشاهده است. می‌توانید نقش کاربران (کاربر عادی / کارمند / مدیر ارشد) را تغییر دهید.
-              </p>
             </div>
 
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1447,7 +1438,7 @@ export const ManagerDashboardPage = () => {
             type="text"
             className="form-control"
             style={{ flex: '1 1 220px' }}
-            placeholder="نام دسته‌بندی جدید (مثلاً: علمی و پژوهشی)"
+            placeholder="نام دسته‌بندی جدید"
             value={catName}
             onChange={(e) => setCatName(e.target.value)}
             required
@@ -1456,7 +1447,7 @@ export const ManagerDashboardPage = () => {
             type="text"
             className="form-control"
             style={{ flex: '1 1 180px' }}
-            placeholder="اسلاگ لاتین (اختیاری، مثلاً: science)"
+            placeholder="اسلاگ لاتین"
             value={catSlug}
             onChange={(e) => setCatSlug(e.target.value)}
             dir="ltr"
@@ -1514,9 +1505,6 @@ export const ManagerDashboardPage = () => {
               <BookMarked size={22} color="var(--accent2)" />
               لیست و تاریخچه امانات کتابخانه ({toPersianDigits(filteredBorrowings.length)})
             </h2>
-            <p style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '3px' }}>
-              برای مشاهده پرونده امانات هر کاربر یا سابقه گردش هر کتاب، روی دکمه تاریخچه مقابل آن کلیک کنید
-            </p>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
