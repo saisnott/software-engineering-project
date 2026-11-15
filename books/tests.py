@@ -407,6 +407,71 @@ class BookstoreAPITests(TestCase):
         self.assertEqual(mark_res.status_code, status.HTTP_200_OK)
         self.assertEqual(mark_res.data['unread_count'], 0)
 
+    def test_history_invalid_query_params_return_400(self):
+        self.client.force_authenticate(user=self.staff_user)
+        res_book = self.client.get('/api/borrowings/history/?book_id=abc')
+        self.assertEqual(res_book.status_code, status.HTTP_400_BAD_REQUEST)
+        res_user = self.client.get('/api/borrowings/history/?user_id=xyz')
+        self.assertEqual(res_user.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_quick_borrow_rejects_invalid_days(self):
+        self.client.force_authenticate(user=self.staff_user)
+        for bad_days in (-5, 0, 500, 'abc', True):
+            res = self.client.post('/api/manager/quick-borrow/', {
+                'user_identifier': self.other_user.username,
+                'book_identifier': str(self.book.id),
+                'days': bad_days,
+            }, format='json')
+            self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+            self.book.refresh_from_db()
+            self.assertTrue(self.book.is_available)
+
+    def test_cannot_delete_book_with_active_borrowing(self):
+        self.client.force_authenticate(user=self.other_user)
+        borrow_res = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(borrow_res.status_code, status.HTTP_201_CREATED)
+
+        self.client.force_authenticate(user=self.user)
+        del_res = self.client.delete(f'/api/books/{self.book.id}/')
+        self.assertEqual(del_res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Book.objects.filter(id=self.book.id).exists())
+
+    def test_overdue_reminder_recreated_on_reborrow(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from .models import Notification
+
+        self.client.force_authenticate(user=self.other_user)
+        b1 = self.client.post(f'/api/books/{self.book.id}/borrow/').data['borrowing']['id']
+        Borrowing.objects.filter(id=b1).update(
+            borrow_date=timezone.now() - timedelta(days=20),
+            due_date=timezone.now() - timedelta(days=5),
+        )
+        loan1 = Borrowing.objects.get(id=b1)
+        self.client.get('/api/notifications/')
+        self.assertEqual(
+            Notification.objects.filter(user=self.other_user, notif_type='reminder').count(),
+            1
+        )
+        Notification.objects.filter(user=self.other_user, notif_type='reminder').update(
+            created_at=loan1.borrow_date + timedelta(days=15)
+        )
+        self.client.post(f'/api/borrowings/{b1}/return/')
+
+        b2 = self.client.post(f'/api/books/{self.book.id}/borrow/').data['borrowing']['id']
+        Borrowing.objects.filter(id=b2).update(
+            borrow_date=timezone.now() - timedelta(days=1),
+            due_date=timezone.now() - timedelta(hours=2),
+        )
+        loan2 = Borrowing.objects.get(id=b2)
+        self.client.get('/api/notifications/')
+        self.assertEqual(
+            Notification.objects.filter(user=self.other_user, notif_type='reminder').count(),
+            2
+        )
+        self.assertGreaterEqual(loan2.borrow_date, loan1.borrow_date)
+
+
 
 
 

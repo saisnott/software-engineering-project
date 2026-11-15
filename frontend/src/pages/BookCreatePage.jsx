@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { ArrowRight, Upload, AlertCircle, ImagePlus, Trash2 } from 'lucide-react';
 import api from '../api/client';
 import { useNotifications } from '../context/NotificationContext';
+import { extractApiError } from '../utils/formatters';
 
 export const BookCreatePage = () => {
   const navigate = useNavigate();
@@ -70,8 +71,9 @@ export const BookCreatePage = () => {
       navigate(`/books/${res.data.id}`);
     } catch (err) {
       console.error(err);
-      setError('خطا در ثبت کتاب جدید. لطفاً مقادیر واردشده را بررسی کنید.');
-      showToast('خطا در ثبت کتاب جدید.', 'danger');
+      const errMsg = extractApiError(err, 'خطا در ثبت کتاب جدید. لطفاً مقادیر واردشده را بررسی کنید.');
+      setError(errMsg);
+      showToast(errMsg, 'danger');
     } finally {
       setSubmitting(false);
     }

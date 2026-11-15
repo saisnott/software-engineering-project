@@ -17,7 +17,8 @@ export const BookListPage = () => {
   const search = searchParams.get('search') || '';
   const statusFilter = searchParams.get('status') || '';
   const sort = searchParams.get('sort') || 'newest';
-  const currentPage = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+  const parsedPage = parseInt(searchParams.get('page') || '1', 10);
+  const currentPage = Number.isNaN(parsedPage) ? 1 : Math.max(1, parsedPage);
 
   useEffect(() => {
     const fetchCategories = async () => {

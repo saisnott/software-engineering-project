@@ -276,7 +276,11 @@ export const UserDashboardPage = () => {
               <h1 style={{ fontSize: '24px', fontWeight: 800 }}>
                 خوش آمدید، {user?.username}
               </h1>
-              {user?.is_staff && <span className="badge badge-category">مدیر کتابخانه</span>}
+              {user?.is_superuser ? (
+                <span className="badge badge-category">مدیر کتابخانه</span>
+              ) : user?.is_staff ? (
+                <span className="badge badge-category">کارمند کتابخانه</span>
+              ) : null}
             </div>
 
             <div style={{ color: 'var(--text-dim)', fontSize: '13.5px', display: 'flex', gap: '18px', flexWrap: 'wrap' }}>

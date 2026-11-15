@@ -2,11 +2,19 @@ from rest_framework import serializers
 from .models import CustomUser
 
 
+def validate_age_range(value):
+    if value is not None and (value < 1 or value > 120):
+        raise serializers.ValidationError('سن باید عددی بین ۱ تا ۱۲۰ سال باشد.')
+
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ['id', 'username', 'email', 'age', 'is_staff', 'is_superuser']
         read_only_fields = ['id', 'is_staff', 'is_superuser']
+        extra_kwargs = {
+            'age': {'validators': [validate_age_range]},
+        }
 
 
 class AdminUserSerializer(serializers.ModelSerializer):
@@ -22,6 +30,9 @@ class AdminUserSerializer(serializers.ModelSerializer):
             'total_borrowings_count', 'password'
         ]
         read_only_fields = ['id', 'date_joined', 'active_borrowings_count', 'total_borrowings_count']
+        extra_kwargs = {
+            'age': {'validators': [validate_age_range]},
+        }
 
     def get_active_borrowings_count(self, obj):
         return obj.borrowings.filter(return_date__isnull=True).count()
@@ -52,6 +63,9 @@ class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ['id', 'username', 'email', 'age', 'password']
+        extra_kwargs = {
+            'age': {'validators': [validate_age_range]},
+        }
 
     def create(self, validated_data):
         password = validated_data.pop('password')

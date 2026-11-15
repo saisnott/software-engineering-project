@@ -164,8 +164,14 @@ class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = BookDetailSerializer
     permission_classes = [IsOwnerOrReadOnly]
 
-    def perform_destroy(self, instance):
-        instance.delete()
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if Borrowing.objects.filter(book=instance, return_date__isnull=True).exists():
+            return Response(
+                {'error': 'این کتاب هم‌اکنون در امانت است و تا زمان بازگشت امکان حذف آن وجود ندارد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class CommentCreateAPIView(generics.CreateAPIView):
@@ -190,44 +196,41 @@ class BorrowBookAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        book = get_object_or_404(Book, id=pk)
+        with transaction.atomic():
+            book = get_object_or_404(Book.objects.select_for_update(), id=pk)
+            active_borrowing = Borrowing.objects.filter(book=book, return_date__isnull=True)
 
-        if not book.is_available:
-            return Response(
-                {"error": "این کتاب در حال حاضر امانت داده شده است."},
-                status=status.HTTP_400_BAD_REQUEST
+            if active_borrowing.filter(user=request.user).exists():
+                return Response(
+                    {"error": "شما قبلاً این کتاب را امانت گرفته‌اید."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not book.is_available or active_borrowing.exists():
+                return Response(
+                    {"error": "این کتاب در حال حاضر امانت داده شده است."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            borrowing = Borrowing.objects.create(
+                user=request.user,
+                book=book,
+                borrow_date=timezone.now(),
+                status='borrowed'
             )
 
-        existing = Borrowing.objects.filter(
-            user=request.user,
-            book=book,
-            return_date__isnull=True
-        ).exists()
-        if existing:
-            return Response(
-                {"error": "شما قبلاً این کتاب را امانت گرفته‌اید."},
-                status=status.HTTP_400_BAD_REQUEST
+            book.is_available = False
+            # Remove user from waitlist if they had reserved it
+            book.waitlist.remove(request.user)
+            book.save(update_fields=['is_available'])
+
+            Notification.objects.create(
+                user=request.user,
+                title='امانت کتاب ثبت شد',
+                message=f"کتاب «{book.title}» با موفقیت برای شما به امانت ثبت شد. مهلت بازگشت: ۱۴ روز.",
+                notif_type='borrow',
+                link=f'/books/{book.id}'
             )
-
-        borrowing = Borrowing.objects.create(
-            user=request.user,
-            book=book,
-            borrow_date=timezone.now(),
-            status='borrowed'
-        )
-
-        book.is_available = False
-        # Remove user from waitlist if they had reserved it
-        book.waitlist.remove(request.user)
-        book.save()
-
-        Notification.objects.create(
-            user=request.user,
-            title='امانت کتاب ثبت شد',
-            message=f"کتاب «{book.title}» با موفقیت برای شما به امانت ثبت شد. مهلت بازگشت: ۱۴ روز.",
-            notif_type='borrow',
-            link=f'/books/{book.id}'
-        )
 
         return Response({
             "message": f"کتاب '{book.title}' با موفقیت امانت گرفته شد.",
@@ -239,54 +242,56 @@ class ReturnBookAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        if request.user.is_staff or request.user.is_superuser:
-            borrowing = get_object_or_404(Borrowing, id=pk)
-        else:
-            borrowing = get_object_or_404(Borrowing, id=pk, user=request.user)
+        with transaction.atomic():
+            qs = Borrowing.objects.select_for_update()
+            if request.user.is_staff or request.user.is_superuser:
+                borrowing = get_object_or_404(qs, id=pk)
+            else:
+                borrowing = get_object_or_404(qs, id=pk, user=request.user)
 
-        if borrowing.return_date is not None:
-            return Response(
-                {"error": "این کتاب قبلاً تحویل داده شده است."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            if borrowing.return_date is not None:
+                return Response(
+                    {"error": "این کتاب قبلاً تحویل داده شده است."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        borrowing.return_date = timezone.now()
-        borrowing.status = 'returned'
-        borrowing.returned_by = request.user
-        borrowing.save()
+            borrowing.return_date = timezone.now()
+            borrowing.status = 'returned'
+            borrowing.returned_by = request.user
+            borrowing.save(update_fields=['return_date', 'status', 'returned_by'])
 
-        book = borrowing.book
-        book.is_available = True
-        book.save()
+            book = Book.objects.select_for_update().get(pk=borrowing.book_id)
+            book.is_available = True
+            book.save(update_fields=['is_available'])
 
-        days = max(1, (borrowing.return_date - borrowing.borrow_date).days) if borrowing.borrow_date else 1
-        if request.user.id == borrowing.user_id:
-            Notification.objects.create(
-                user=borrowing.user,
-                title='تحویل کتاب به کتابخانه',
-                message=f"کتاب «{book.title}» پس از {days} روز مطالعه با موفقیت به کتابخانه بازگردانده شد.",
-                notif_type='return',
-                link=f'/books/{book.id}'
-            )
-        else:
-            Notification.objects.create(
-                user=borrowing.user,
-                title='ثبت تحویل کتاب توسط مدیریت',
-                message=f"تحویل کتاب «{book.title}» توسط مدیریت کتابخانه (@{request.user.username}) ثبت شد و از لیست امانت‌های فعال شما خارج گردید.",
-                notif_type='return',
-                link='/dashboard'
-            )
+            days = max(1, (borrowing.return_date - borrowing.borrow_date).days) if borrowing.borrow_date else 1
+            if request.user.id == borrowing.user_id:
+                Notification.objects.create(
+                    user=borrowing.user,
+                    title='تحویل کتاب به کتابخانه',
+                    message=f"کتاب «{book.title}» پس از {days} روز مطالعه با موفقیت به کتابخانه بازگردانده شد.",
+                    notif_type='return',
+                    link=f'/books/{book.id}'
+                )
+            else:
+                Notification.objects.create(
+                    user=borrowing.user,
+                    title='ثبت تحویل کتاب توسط مدیریت',
+                    message=f"تحویل کتاب «{book.title}» توسط مدیریت کتابخانه (@{request.user.username}) ثبت شد و از لیست امانت‌های فعال شما خارج گردید.",
+                    notif_type='return',
+                    link='/dashboard'
+                )
 
-        # Notify users waiting in the reservation waitlist for this book
-        waitlist_users = list(book.waitlist.all())
-        for w_user in waitlist_users:
-            Notification.objects.create(
-                user=w_user,
-                title='موجود شدن کتاب رزرو شده!',
-                message=f"مژده! کتاب «{book.title}» که در صف رزرو شما قرار داشت هم‌اکنون تحویل داده شد و آماده امانت‌گیری است.",
-                notif_type='waitlist',
-                link=f'/books/{book.id}'
-            )
+            # Notify users waiting in the reservation waitlist for this book
+            waitlist_users = list(book.waitlist.all())
+            for w_user in waitlist_users:
+                Notification.objects.create(
+                    user=w_user,
+                    title='موجود شدن کتاب رزرو شده!',
+                    message=f"مژده! کتاب «{book.title}» که در صف رزرو شما قرار داشت هم‌اکنون تحویل داده شد و آماده امانت‌گیری است.",
+                    notif_type='waitlist',
+                    link=f'/books/{book.id}'
+                )
 
         return Response({
             "message": f"کتاب '{book.title}' با موفقیت به کتابخانه بازگردانده شد."
@@ -518,13 +523,16 @@ class BorrowingHistoryAPIView(APIView):
     def get(self, request):
         qs = Borrowing.objects.select_related('book', 'user', 'returned_by').order_by('-borrow_date')
 
-        book_id = request.query_params.get('book_id')
-        if book_id:
-            qs = qs.filter(book_id=book_id)
-
-        user_id = request.query_params.get('user_id')
-        if user_id:
-            qs = qs.filter(user_id=user_id)
+        for param_name in ('book_id', 'user_id'):
+            raw_val = request.query_params.get(param_name)
+            if raw_val not in (None, ''):
+                try:
+                    qs = qs.filter(**{param_name: int(raw_val)})
+                except (TypeError, ValueError):
+                    return Response(
+                        {'error': f'مقدار پارامتر {param_name} باید عدد صحیح باشد.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
         search = request.query_params.get('search', '').strip()
         if search:
@@ -769,12 +777,26 @@ class StaffQuickBorrowAPIView(APIView):
         book_identifier = request.data.get('book_identifier')
         raw_days = request.data.get('days', 14)
 
-        try:
-            days = int(raw_days)
-            if days < 1 or days > 365:
-                days = 14
-        except (TypeError, ValueError):
+        if raw_days is None or raw_days == '':
             days = 14
+        else:
+            if isinstance(raw_days, bool):
+                return Response(
+                    {'error': 'مدت امانت باید عددی بین ۱ تا ۳۶۵ روز باشد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                days = int(raw_days)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'مدت امانت باید یک عدد صحیح بین ۱ تا ۳۶۵ روز باشد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if days < 1 or days > 365:
+                return Response(
+                    {'error': 'مدت امانت باید عددی بین ۱ تا ۳۶۵ روز باشد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         if not user_identifier or not book_identifier:
             return Response(
@@ -864,7 +886,12 @@ class NotificationListAPIView(APIView):
             rem_days = (loan.due_date - now).days
             if now > loan.due_date:
                 overdue_title = f"هشدار تأخیر: کتاب «{loan.book.title}»"
-                if not Notification.objects.filter(user=request.user, notif_type='reminder', title=overdue_title).exists():
+                if not Notification.objects.filter(
+                    user=request.user,
+                    notif_type='reminder',
+                    title=overdue_title,
+                    created_at__gte=loan.borrow_date,
+                ).exists():
                     Notification.objects.create(
                         user=request.user,
                         title=overdue_title,
@@ -874,7 +901,12 @@ class NotificationListAPIView(APIView):
                     )
             elif 0 <= rem_days <= 2:
                 due_title = f"یادآوری موعد بازگشت: «{loan.book.title}»"
-                if not Notification.objects.filter(user=request.user, notif_type='reminder', title=due_title).exists():
+                if not Notification.objects.filter(
+                    user=request.user,
+                    notif_type='reminder',
+                    title=due_title,
+                    created_at__gte=loan.borrow_date,
+                ).exists():
                     Notification.objects.create(
                         user=request.user,
                         title=due_title,

@@ -24,7 +24,7 @@ import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { BookCard } from '../components/BookCard';
-import { formatPrice, formatPersianDate, toPersianDigits } from '../utils/formatters';
+import { formatPrice, formatPersianDate, toPersianDigits, extractApiError } from '../utils/formatters';
 
 export const BookDetailPage = () => {
   const { id } = useParams();
@@ -53,6 +53,7 @@ export const BookDetailPage = () => {
       setBook(res.data);
     } catch (err) {
       console.error('Error fetching book detail', err);
+      setBook(null);
     } finally {
       setLoading(false);
       if (shouldScrollTop) {
@@ -65,6 +66,7 @@ export const BookDetailPage = () => {
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    setBook(null);
     setLoading(true);
     setMessage(null);
     fetchBook(true);
@@ -204,10 +206,11 @@ export const BookDetailPage = () => {
       if (dialogRef.current) dialogRef.current.close();
       showToast(`کتاب «${book?.title || ''}» با موفقیت حذف شد.`, 'info');
       navigate('/books');
-    } catch {
+    } catch (err) {
       if (dialogRef.current) dialogRef.current.close();
-      setMessage({ type: 'danger', text: 'خطا در حذف کتاب. لطفاً دوباره تلاش کنید.' });
-      showToast('خطا در حذف کتاب.', 'danger');
+      const errMsg = extractApiError(err, 'خطا در حذف کتاب. لطفاً دوباره تلاش کنید.');
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
     } finally {
       setDeleting(false);
     }

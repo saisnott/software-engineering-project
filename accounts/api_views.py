@@ -1,10 +1,11 @@
+from django.db import transaction
 from django.db.models import Q
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from books.models import Notification
+from books.models import Book, Notification
 from .models import CustomUser
 from .serializers import AdminUserSerializer, RegisterSerializer, UserSerializer
 
@@ -17,15 +18,6 @@ class LoginAPIView(TokenObtainPairView):
         password = request.data.get('password') or ''
 
         user = CustomUser.objects.filter(username=username).first()
-        if user and not user.is_active:
-            return Response(
-                {
-                    'error': 'حساب کاربری شما توسط ادمین غیرفعال شده است.',
-                    'detail': 'حساب کاربری شما توسط ادمین غیرفعال شده است.',
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         if not user or not user.check_password(password):
             return Response(
                 {
@@ -33,6 +25,15 @@ class LoginAPIView(TokenObtainPairView):
                     'detail': 'نام کاربری یا رمز عبور اشتباه است. لطفاً دوباره تلاش کنید.',
                 },
                 status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not user.is_active:
+            return Response(
+                {
+                    'error': 'حساب کاربری شما توسط ادمین غیرفعال شده است.',
+                    'detail': 'حساب کاربری شما توسط ادمین غیرفعال شده است.',
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         return super().post(request, *args, **kwargs)
@@ -123,21 +124,28 @@ class SuperuserUserDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsSuperUser]
 
     def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
         target_user = self.get_object()
+        serializer = self.get_serializer(target_user, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
         if target_user.id == request.user.id:
-            if 'is_superuser' in request.data and not request.data.get('is_superuser'):
+            if serializer.validated_data.get('is_superuser') is False:
                 return Response(
                     {'error': 'شما نمی‌توانید دسترسی مدیر ارشد (Superuser) حساب خودتان را لغو کنید.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            if 'is_active' in request.data and not request.data.get('is_active'):
+            if serializer.validated_data.get('is_active') is False:
                 return Response(
                     {'error': 'شما نمی‌توانید حساب کاربری خودتان را غیرفعال کنید.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
         old_staff = target_user.is_staff
         old_super = target_user.is_superuser
-        response = super().update(request, *args, **kwargs)
+        self.perform_update(serializer)
+        if getattr(target_user, '_prefetched_objects_cache', None):
+            target_user._prefetched_objects_cache = {}
         target_user.refresh_from_db()
         if target_user.is_staff != old_staff or target_user.is_superuser != old_super:
             role_label = (
@@ -154,7 +162,7 @@ class SuperuserUserDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
                 notif_type='role',
                 link='/manager/dashboard' if (target_user.is_staff or target_user.is_superuser) else '/dashboard'
             )
-        return response
+        return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
         target_user = self.get_object()
@@ -163,4 +171,10 @@ class SuperuserUserDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
                 {'error': 'شما نمی‌توانید حساب کاربری خودتان را حذف کنید.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        return super().destroy(request, *args, **kwargs)
+        with transaction.atomic():
+            active_book_ids = list(
+                target_user.borrowings.filter(return_date__isnull=True).values_list('book_id', flat=True)
+            )
+            if active_book_ids:
+                Book.objects.filter(id__in=active_book_ids).update(is_available=True)
+            return super().destroy(request, *args, **kwargs)

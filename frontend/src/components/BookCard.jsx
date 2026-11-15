@@ -8,8 +8,16 @@ import { formatPrice, toPersianDigits } from '../utils/formatters';
 export const BookCard = ({ book, onWishlistChange }) => {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [wishlisted, setWishlisted] = useState(Boolean(book.is_wishlisted));
+  const expectedWishlist = isAuthenticated && Boolean(book.is_wishlisted);
+  const [wishlisted, setWishlisted] = useState(expectedWishlist);
+  const [syncKey, setSyncKey] = useState(`${book.id}:${expectedWishlist}`);
   const [togglingWishlist, setTogglingWishlist] = useState(false);
+
+  const nextSyncKey = `${book.id}:${expectedWishlist}`;
+  if (syncKey !== nextSyncKey) {
+    setSyncKey(nextSyncKey);
+    setWishlisted(expectedWishlist);
+  }
 
   const handleWishlistClick = async (e) => {
     e.preventDefault();

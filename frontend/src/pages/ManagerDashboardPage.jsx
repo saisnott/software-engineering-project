@@ -239,7 +239,7 @@ export const ManagerDashboardPage = () => {
     setHistoryModalData({
       mode: 'book',
       title: `سابقه گردش کتاب «${bookTitle}»`,
-      subtitle: 'فهرست تمامی کاربرانی که این کتاب را امانت گرفته یا تحویل داده‌اند',
+      subtitle: '',
       summary: null,
       results: []
     });
@@ -770,7 +770,7 @@ export const ManagerDashboardPage = () => {
                 <option value="">-- انتخاب عضو از لیست --</option>
                 {members_directory.map((m) => (
                   <option key={m.id} value={m.username} dir="ltr">
-                    {`${m.username} - ${m.active_loans_count} active loans`}
+                    {`${m.username} - ${m.active_loans_count} ${m.active_loans_count === 1 ? 'active borrowing' : 'active borrowings'}`}
                   </option>
                 ))}
               </select>
@@ -1540,7 +1540,7 @@ export const ManagerDashboardPage = () => {
                 className={`tab-pill-btn ${loanFilter === 'returned' ? 'active' : ''}`}
                 onClick={() => setLoanFilter('returned')}
               >
-                تحویل داده شده ({toPersianDigits(Math.max(0, borrowingsList.length - active_borrowings.length))})
+                تحویل داده شده ({toPersianDigits(borrowingsList.filter((item) => Boolean(item.return_date)).length)})
               </button>
               <button
                 type="button"

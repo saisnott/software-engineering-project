@@ -2,15 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowRight, Save, AlertCircle, ImagePlus, Trash2 } from 'lucide-react';
 import api from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
+import { extractApiError } from '../utils/formatters';
 
 export const BookEditPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const { showToast } = useNotifications();
   const fileInputRef = useRef(null);
 
   const [categories, setCategories] = useState([]);
+  const [bookOwnerId, setBookOwnerId] = useState(null);
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [description, setDescription] = useState('');
@@ -32,14 +36,15 @@ export const BookEditPage = () => {
         ]);
         setCategories(catsRes.data);
         const b = bookRes.data;
+        setBookOwnerId(b.user);
         setTitle(b.title);
         setAuthor(b.author);
         setDescription(b.description);
         setPrice(b.price);
         setCategory(b.category || '');
         setExistingCover(b.covers || null);
-      } catch {
-        setError('خطا در بارگذاری اطلاعات کتاب برای ویرایش.');
+      } catch (err) {
+        setError(extractApiError(err, 'خطا در بارگذاری اطلاعات کتاب برای ویرایش.'));
       } finally {
         setLoading(false);
       }
@@ -76,18 +81,37 @@ export const BookEditPage = () => {
       });
       showToast(`مشخصات کتاب «${title}» با موفقیت بروزرسانی شد.`, 'success');
       navigate(`/books/${id}`);
-    } catch {
-      setError('خطا در بروزرسانی اطلاعات کتاب.');
-      showToast('خطا در بروزرسانی اطلاعات کتاب.', 'danger');
+    } catch (err) {
+      const errMsg = extractApiError(err, 'خطا در بروزرسانی اطلاعات کتاب.');
+      setError(errMsg);
+      showToast(errMsg, 'danger');
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <div className="container" style={{ padding: '80px 0', textAlign: 'center', color: 'var(--text-dim)' }}>
         در حال بارگذاری اطلاعات کتاب...
+      </div>
+    );
+  }
+
+  const canEdit = Boolean(
+    user && (user.id === bookOwnerId || user.is_staff || user.is_superuser)
+  );
+  if (bookOwnerId !== null && !canEdit) {
+    return (
+      <div className="container" style={{ maxWidth: '640px', padding: '60px 0', textAlign: 'center' }}>
+        <div className="card" style={{ padding: '32px' }}>
+          <div className="alert alert-danger" style={{ justifyContent: 'center', marginBottom: '20px' }}>
+            <AlertCircle size={18} /> شما اجازه ویرایش این کتاب را ندارید.
+          </div>
+          <Link to={`/books/${id}`} className="btn-outline">
+            <ArrowRight size={16} /> بازگشت به صفحه کتاب
+          </Link>
+        </div>
       </div>
     );
   }
