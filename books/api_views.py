@@ -2,7 +2,7 @@ import re
 from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Avg, F, Q
+from django.db.models import Avg, F, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -10,8 +10,9 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Book, Borrowing, Category, Comment, Notification
+from .models import Book, BookCopy, Borrowing, Category, Comment, Notification
 from .serializers import (
+    BookCopySerializer,
     BookDetailSerializer,
     BookListSerializer,
     BorrowingSerializer,
@@ -21,6 +22,51 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+
+def _parse_strict_int_in_range(raw_value, min_val=1, max_val=50):
+    if isinstance(raw_value, bool):
+        return None
+    if isinstance(raw_value, int):
+        val = raw_value
+    elif isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text.isdigit():
+            return None
+        val = int(text)
+    else:
+        return None
+    if val < min_val or val > max_val:
+        return None
+    return val
+
+
+def _notify_waitlist_available(book, message):
+    waitlist_users = list(book.waitlist.all())
+    for w_user in waitlist_users:
+        Notification.objects.create(
+            user=w_user,
+            title='موجود شدن کتاب رزرو شده!',
+            message=message,
+            notif_type='waitlist',
+            link=f'/books/{book.id}'
+        )
+
+
+def _with_copy_prefetches(queryset, user=None):
+    is_staff_viewer = bool(user and getattr(user, 'is_authenticated', False) and (user.is_staff or user.is_superuser))
+    if not is_staff_viewer:
+        return queryset.prefetch_related('copies')
+    active_borrowings_qs = Borrowing.objects.filter(return_date__isnull=True).select_related('user').order_by('id')
+    return queryset.prefetch_related(
+        Prefetch('borrowings', queryset=active_borrowings_qs, to_attr='prefetched_active_borrowings'),
+        Prefetch(
+            'copies',
+            queryset=BookCopy.objects.prefetch_related(
+                Prefetch('borrowings', queryset=active_borrowings_qs, to_attr='prefetched_active_borrowings')
+            )
+        ),
+    )
 
 
 def resolve_user_from_identifier(raw_identifier):
@@ -125,7 +171,10 @@ class BookListCreateAPIView(generics.ListCreateAPIView):
         return BookListSerializer
 
     def get_queryset(self):
-        queryset = Book.objects.select_related('category', 'user').all()
+        queryset = _with_copy_prefetches(
+            Book.objects.select_related('category', 'user').all(),
+            getattr(self.request, 'user', None)
+        )
 
         category_slug = self.request.query_params.get('category')
         if category_slug:
@@ -156,13 +205,32 @@ class BookListCreateAPIView(generics.ListCreateAPIView):
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user, is_available=True)
+        raw_copies = serializer.validated_data.pop('copies_count', 1)
+        copies_count = max(1, min(100, int(raw_copies or 1)))
+        book = serializer.save(user=self.request.user, is_available=True)
+        existing_count = book.copies.count()
+        if copies_count > existing_count:
+            BookCopy.objects.bulk_create([
+                BookCopy(book=book, is_available=True)
+                for _ in range(copies_count - existing_count)
+            ])
+        book.sync_availability()
 
 
 class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Book.objects.select_related('category', 'user').prefetch_related('comments__user').all()
     serializer_class = BookDetailSerializer
     permission_classes = [IsOwnerOrReadOnly]
+
+    def get_queryset(self):
+        return _with_copy_prefetches(
+            Book.objects.select_related('category', 'user').prefetch_related('comments__user').all(),
+            getattr(self.request, 'user', None)
+        )
+
+    def perform_update(self, serializer):
+        serializer.validated_data.pop('copies_count', None)
+        book = serializer.save()
+        book.sync_availability()
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -172,6 +240,84 @@ class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         return super().destroy(request, *args, **kwargs)
+
+
+class BookCopyCreateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        book = get_object_or_404(Book, id=pk)
+        if not (book.user_id == request.user.id or request.user.is_staff or request.user.is_superuser):
+            return Response(
+                {'error': 'شما اجازه مدیریت شناسه‌های این کتاب را ندارید.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        count = _parse_strict_int_in_range(request.data.get('count', 1), min_val=1, max_val=50)
+        if count is None:
+            return Response(
+                {'error': 'تعداد باید یک عدد صحیح بین ۱ تا ۵۰ باشد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            created_copies = [
+                BookCopy.objects.create(book=book, is_available=True)
+                for _ in range(count)
+            ]
+            book.sync_availability()
+            _notify_waitlist_available(
+                book,
+                f"مژده! نسخه جدیدی از کتاب «{book.title}» که در صف رزرو شما قرار داشت به کتابخانه اضافه شد و هم‌اکنون آماده امانت‌گیری است."
+            )
+
+        all_copies = book.copies.all()
+        return Response({
+            'message': f'{count} جلد جدید به کتاب «{book.title}» اضافه شد.',
+            'created_copies': BookCopySerializer(created_copies, many=True, context={'request': request}).data,
+            'copies': BookCopySerializer(all_copies, many=True, context={'request': request}).data,
+            'total_copies_count': all_copies.count(),
+            'available_copies_count': all_copies.filter(is_available=True).count(),
+            'is_available': book.is_available,
+        }, status=status.HTTP_201_CREATED)
+
+
+class BookCopyDeleteAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk, copy_id):
+        book = get_object_or_404(Book, id=pk)
+        if not (book.user_id == request.user.id or request.user.is_staff or request.user.is_superuser):
+            return Response(
+                {'error': 'شما اجازه مدیریت شناسه‌های این کتاب را ندارید.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        with transaction.atomic():
+            copy_obj = get_object_or_404(BookCopy.objects.select_for_update(), id=copy_id, book=book)
+            if not copy_obj.is_available or Borrowing.objects.filter(book_copy=copy_obj, return_date__isnull=True).exists():
+                return Response(
+                    {'error': f'شناسه #{copy_obj.id} هم‌اکنون در دست امانت است و امکان حذف آن وجود ندارد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if book.copies.count() <= 1:
+                return Response(
+                    {'error': 'هر کتاب باید حداقل ۱ شناسه داشته باشد. برای حذف کامل کتاب از گزینه حذف کتاب استفاده کنید.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            deleted_id = copy_obj.id
+            Borrowing.objects.filter(book_copy=copy_obj, copy_id_snapshot__isnull=True).update(copy_id_snapshot=deleted_id)
+            copy_obj.delete()
+            book.sync_availability()
+
+        all_copies = book.copies.all()
+        return Response({
+            'message': f'شناسه #{deleted_id} با موفقیت حذف شد.',
+            'copies': BookCopySerializer(all_copies, many=True, context={'request': request}).data,
+            'total_copies_count': all_copies.count(),
+            'available_copies_count': all_copies.filter(is_available=True).count(),
+            'is_available': book.is_available,
+        }, status=status.HTTP_200_OK)
 
 
 class CommentCreateAPIView(generics.CreateAPIView):
@@ -198,42 +344,54 @@ class BorrowBookAPIView(APIView):
     def post(self, request, pk):
         with transaction.atomic():
             book = get_object_or_404(Book.objects.select_for_update(), id=pk)
-            active_borrowing = Borrowing.objects.filter(book=book, return_date__isnull=True)
 
-            if active_borrowing.filter(user=request.user).exists():
+            if Borrowing.objects.filter(book=book, user=request.user, return_date__isnull=True).exists():
                 return Response(
                     {"error": "شما قبلاً این کتاب را امانت گرفته‌اید."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if not book.is_available or active_borrowing.exists():
+            if not book.copies.exists():
+                BookCopy.objects.create(book=book, is_available=book.is_available)
+
+            available_copy = (
+                BookCopy.objects.select_for_update()
+                .filter(book=book, is_available=True)
+                .order_by('id')
+                .first()
+            )
+            if not available_copy or not book.is_available:
+                book.sync_availability()
                 return Response(
                     {"error": "این کتاب در حال حاضر امانت داده شده است."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            available_copy.is_available = False
+            available_copy.save(update_fields=['is_available'])
+
             borrowing = Borrowing.objects.create(
                 user=request.user,
                 book=book,
+                book_copy=available_copy,
                 borrow_date=timezone.now(),
                 status='borrowed'
             )
 
-            book.is_available = False
             # Remove user from waitlist if they had reserved it
             book.waitlist.remove(request.user)
-            book.save(update_fields=['is_available'])
+            book.sync_availability()
 
             Notification.objects.create(
                 user=request.user,
                 title='امانت کتاب ثبت شد',
-                message=f"کتاب «{book.title}» با موفقیت برای شما به امانت ثبت شد. مهلت بازگشت: ۱۴ روز.",
+                message=f"کتاب «{book.title}» (شناسه #{available_copy.id}) با موفقیت برای شما به امانت ثبت شد. مهلت بازگشت: ۱۴ روز.",
                 notif_type='borrow',
                 link=f'/books/{book.id}'
             )
 
         return Response({
-            "message": f"کتاب '{book.title}' با موفقیت امانت گرفته شد.",
+            "message": f"کتاب '{book.title}' (شناسه #{available_copy.id}) با موفقیت امانت گرفته شد.",
             "borrowing": BorrowingSerializer(borrowing, context={'request': request}).data
         }, status=status.HTTP_201_CREATED)
 
@@ -261,8 +419,14 @@ class ReturnBookAPIView(APIView):
             borrowing.save(update_fields=['return_date', 'status', 'returned_by'])
 
             book = Book.objects.select_for_update().get(pk=borrowing.book_id)
-            book.is_available = True
-            book.save(update_fields=['is_available'])
+            if borrowing.book_copy_id:
+                BookCopy.objects.filter(pk=borrowing.book_copy_id).update(is_available=True)
+            else:
+                unavailable_copy = BookCopy.objects.filter(book=book, is_available=False).order_by('id').first()
+                if unavailable_copy:
+                    unavailable_copy.is_available = True
+                    unavailable_copy.save(update_fields=['is_available'])
+            book.sync_availability()
 
             days = max(1, (borrowing.return_date - borrowing.borrow_date).days) if borrowing.borrow_date else 1
             if request.user.id == borrowing.user_id:
@@ -283,15 +447,10 @@ class ReturnBookAPIView(APIView):
                 )
 
             # Notify users waiting in the reservation waitlist for this book
-            waitlist_users = list(book.waitlist.all())
-            for w_user in waitlist_users:
-                Notification.objects.create(
-                    user=w_user,
-                    title='موجود شدن کتاب رزرو شده!',
-                    message=f"مژده! کتاب «{book.title}» که در صف رزرو شما قرار داشت هم‌اکنون تحویل داده شد و آماده امانت‌گیری است.",
-                    notif_type='waitlist',
-                    link=f'/books/{book.id}'
-                )
+            _notify_waitlist_available(
+                book,
+                f"مژده! کتاب «{book.title}» که در صف رزرو شما قرار داشت هم‌اکنون تحویل داده شد و آماده امانت‌گیری است."
+            )
 
         return Response({
             "message": f"کتاب '{book.title}' با موفقیت به کتابخانه بازگردانده شد."
@@ -591,20 +750,25 @@ class LibraryManagerStatsAPIView(APIView):
 
     def get(self, request):
         now = timezone.now()
-        total_books = Book.objects.count()
-        borrowed_count = Book.objects.filter(is_available=False).count()
-        available_count = total_books - borrowed_count
+        total_copies = BookCopy.objects.count()
+        total_titles = Book.objects.count()
+        total_books = total_copies if total_copies > 0 else total_titles
+        borrowed_count = BookCopy.objects.filter(is_available=False).count()
+        available_count = max(0, total_books - borrowed_count)
         categories = Category.objects.all()
         categories_count = categories.count()
-        recent_books = Book.objects.select_related('category', 'user').order_by('-id')[:20]
+        recent_books = _with_copy_prefetches(
+            Book.objects.select_related('category', 'user').order_by('-id'),
+            request.user
+        )[:20]
 
         active_borrowings = list(
             Borrowing.objects.filter(return_date__isnull=True)
-            .select_related('book', 'user', 'returned_by')
+            .select_related('book', 'book_copy', 'user', 'returned_by')
             .order_by('due_date')
         )
 
-        all_borrowings = Borrowing.objects.select_related('book', 'user', 'returned_by').order_by('-borrow_date')[:100]
+        all_borrowings = Borrowing.objects.select_related('book', 'book_copy', 'user', 'returned_by').order_by('-borrow_date')[:100]
 
         # Build lightweight member directory for Staff & Superuser Quick Loan + Broadcast
         active_loans_by_user = {}
@@ -632,9 +796,12 @@ class LibraryManagerStatsAPIView(APIView):
                 'has_overdue': u.id in overdue_users_set,
             })
 
-        books_qs = Book.objects.select_related('category').order_by('-is_available', 'title')
-        books_directory = [
-            {
+        books_qs = Book.objects.select_related('category').prefetch_related('copies').order_by('-is_available', 'title')
+        books_directory = []
+        for b in books_qs:
+            all_copies = list(b.copies.all())
+            avail_copies = [c for c in all_copies if c.is_available]
+            books_directory.append({
                 'id': b.id,
                 'book_code': f"LIB-B{b.id:04d}",
                 'qr_payload': f"BOOKSTORE-BOOK:LIB-B{b.id:04d}|ID:{b.id}",
@@ -642,9 +809,10 @@ class LibraryManagerStatsAPIView(APIView):
                 'author': b.author,
                 'is_available': b.is_available,
                 'category_name': b.category.name if b.category else 'بدون دسته',
-            }
-            for b in books_qs
-        ]
+                'total_copies_count': len(all_copies),
+                'available_copies_count': len(avail_copies),
+                'available_copies': [{'id': c.id} for c in avail_copies],
+            })
 
         recent_notifs = Notification.objects.select_related('user').order_by('-created_at')[:10]
         recent_broadcasts = [
@@ -663,6 +831,7 @@ class LibraryManagerStatsAPIView(APIView):
 
         return Response({
             'total_books': total_books,
+            'total_titles': total_titles,
             'borrowed_count': borrowed_count,
             'available_count': available_count,
             'categories_count': categories_count,
@@ -817,7 +986,16 @@ class StaffQuickBorrowAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        resolved_book = resolve_book_from_identifier(book_identifier)
+        raw_book_str = str(book_identifier).strip()
+        explicit_copy_id = None
+        m_copy = re.match(r'^COPY:0*(\d+)$', raw_book_str, re.IGNORECASE)
+        if m_copy:
+            explicit_copy_id = int(m_copy.group(1))
+            copy_lookup = BookCopy.objects.select_related('book').filter(id=explicit_copy_id).first()
+            resolved_book = copy_lookup.book if copy_lookup else None
+        else:
+            resolved_book = resolve_book_from_identifier(book_identifier)
+
         if not resolved_book:
             return Response(
                 {'error': 'کتاب مورد نظر در مخزن یافت نشد.'},
@@ -826,23 +1004,49 @@ class StaffQuickBorrowAPIView(APIView):
 
         with transaction.atomic():
             book = Book.objects.select_for_update().get(pk=resolved_book.pk)
-            active_loan = Borrowing.objects.filter(book=book, return_date__isnull=True).select_related('user').first()
-            if not book.is_available or active_loan:
-                holder = f"@{active_loan.user.username}" if active_loan and active_loan.user else "کاربر دیگر"
+            if Borrowing.objects.filter(book=book, user=target_user, return_date__isnull=True).exists():
                 return Response(
-                    {'error': f'کتاب «{book.title}» هم‌اکنون در امانت {holder} است و در قفسه موجود نیست.'},
+                    {'error': f'کاربر @{target_user.username} هم‌اکنون یک جلد از کتاب «{book.title}» را در دست امانت دارد.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
+            if not book.copies.exists():
+                BookCopy.objects.create(book=book, is_available=book.is_available)
+
+            if explicit_copy_id is not None:
+                selected_copy = BookCopy.objects.select_for_update().filter(id=explicit_copy_id, book=book).first()
+                if not selected_copy or not selected_copy.is_available:
+                    return Response(
+                        {'error': f'جلد انتخاب‌شده (شناسه #{explicit_copy_id}) از کتاب «{book.title}» در حال حاضر موجود نیست.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                selected_copy = (
+                    BookCopy.objects.select_for_update()
+                    .filter(book=book, is_available=True)
+                    .order_by('id')
+                    .first()
+                )
+                if not selected_copy or not book.is_available:
+                    active_loan = Borrowing.objects.filter(book=book, return_date__isnull=True).select_related('user').first()
+                    holder = f"@{active_loan.user.username}" if active_loan and active_loan.user else "کاربران دیگر"
+                    return Response(
+                        {'error': f'تمامی جلدهای کتاب «{book.title}» هم‌اکنون در امانت ({holder}) است و در قفسه موجود نیست.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            selected_copy.is_available = False
+            selected_copy.save(update_fields=['is_available'])
 
             due_date = timezone.now() + timedelta(days=days)
             borrowing = Borrowing.objects.create(
                 user=target_user,
                 book=book,
+                book_copy=selected_copy,
                 due_date=due_date,
                 status='borrowed'
             )
-            book.is_available = False
-            book.save(update_fields=['is_available'])
+            book.sync_availability()
 
             if book.waitlist.filter(id=target_user.id).exists():
                 book.waitlist.remove(target_user)
@@ -851,7 +1055,7 @@ class StaffQuickBorrowAPIView(APIView):
                 user=target_user,
                 title=f"ثبت امانت حضوری: «{book.title}»",
                 message=(
-                    f"کتاب «{book.title}» توسط مسئول میز امانت (@{request.user.username}) "
+                    f"کتاب «{book.title}» (شناسه #{selected_copy.id}) توسط مسئول میز امانت (@{request.user.username}) "
                     f"به مدت {days} روز برای شما ثبت شد."
                 ),
                 notif_type='borrow',
@@ -861,7 +1065,7 @@ class StaffQuickBorrowAPIView(APIView):
         return Response(
             {
                 'message': (
-                    f"امانت حضوری کتاب «{book.title}» برای کاربر @{target_user.username} "
+                    f"امانت حضوری کتاب «{book.title}» (شناسه #{selected_copy.id}) برای کاربر @{target_user.username} "
                     f"به مدت {days} روز با موفقیت ثبت شد."
                 ),
                 'borrowing': BorrowingSerializer(borrowing, context={'request': request}).data,

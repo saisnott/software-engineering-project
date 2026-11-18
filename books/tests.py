@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
-from .models import Book, Category, Comment, Borrowing
+from .models import Book, BookCopy, Category, Comment, Borrowing, Notification
 
 User = get_user_model()
 
@@ -470,6 +470,149 @@ class BookstoreAPITests(TestCase):
             2
         )
         self.assertGreaterEqual(loan2.borrow_date, loan1.borrow_date)
+
+    def test_multi_copy_book_lifecycle_and_management(self):
+        self.client.force_authenticate(user=self.user)
+        create_res = self.client.post('/api/books/', {
+            'title': 'کلیدر',
+            'author': 'محمود دولت‌آبادی',
+            'description': 'رمان ده‌جلدی',
+            'price': '45.00',
+            'copies_count': 2,
+        }, format='json')
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
+        book_id = create_res.data['id']
+        self.assertEqual(create_res.data['total_copies_count'], 2)
+        self.assertEqual(create_res.data['available_copies_count'], 2)
+        copy_ids = [c['id'] for c in create_res.data['copies']]
+        self.assertEqual(len(copy_ids), 2)
+        self.assertNotEqual(copy_ids[0], copy_ids[1])
+
+        # User 1 borrows copy #1 -> book still has 1 available copy, so is_available remains True
+        self.client.force_authenticate(user=self.user)
+        b1 = self.client.post(f'/api/books/{book_id}/borrow/')
+        self.assertEqual(b1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(b1.data['borrowing']['copy_id'], copy_ids[0])
+        book_obj = Book.objects.get(id=book_id)
+        self.assertTrue(book_obj.is_available)
+
+        # User 1 cannot borrow a second copy of the same book simultaneously
+        b1_dup = self.client.post(f'/api/books/{book_id}/borrow/')
+        self.assertEqual(b1_dup.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # User 2 borrows copy #2 via Staff Quick Borrow using explicit COPY:<id>
+        self.client.force_authenticate(user=self.staff_user)
+        b2 = self.client.post('/api/manager/quick-borrow/', {
+            'user_identifier': self.other_user.username,
+            'book_identifier': f'COPY:{copy_ids[1]}',
+            'days': 10,
+        }, format='json')
+        self.assertEqual(b2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(b2.data['borrowing']['copy_id'], copy_ids[1])
+        book_obj.refresh_from_db()
+        self.assertFalse(book_obj.is_available)
+
+        detail_both = self.client.get(f'/api/books/{book_id}/')
+        self.assertEqual(detail_both.data['current_borrower'], f'{self.user.username}، {self.other_user.username}')
+
+        # Adding a 3rd copy makes the book available again
+        add_copy_res = self.client.post(f'/api/books/{book_id}/copies/', {'count': 1}, format='json')
+        self.assertEqual(add_copy_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(add_copy_res.data['total_copies_count'], 3)
+        self.assertEqual(add_copy_res.data['available_copies_count'], 1)
+        self.assertTrue(add_copy_res.data['is_available'])
+        third_copy_id = add_copy_res.data['created_copies'][0]['id']
+
+        # Cannot delete a borrowed copy (copy_ids[0])
+        del_borrowed = self.client.delete(f'/api/books/{book_id}/copies/{copy_ids[0]}/')
+        self.assertEqual(del_borrowed.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Can delete the available 3rd copy
+        del_avail = self.client.delete(f'/api/books/{book_id}/copies/{third_copy_id}/')
+        self.assertEqual(del_avail.status_code, status.HTTP_200_OK)
+        self.assertEqual(del_avail.data['total_copies_count'], 2)
+        self.assertEqual(del_avail.data['available_copies_count'], 0)
+        self.assertFalse(del_avail.data['is_available'])
+
+        # Returning copy #1 makes book available again
+        borrowing1_id = b1.data['borrowing']['id']
+        ret_res = self.client.post(f'/api/borrowings/{borrowing1_id}/return/')
+        self.assertEqual(ret_res.status_code, status.HTTP_200_OK)
+        book_obj.refresh_from_db()
+        self.assertTrue(book_obj.is_available)
+
+    def test_multi_copy_security_validation_history_and_waitlist(self):
+        # 1. Strict integer validation for BookCopyCreateAPIView
+        self.client.force_authenticate(user=self.staff_user)
+        for bad_count in (True, False, 1.9, '1.5', 0, 51):
+            bad_res = self.client.post(f'/api/books/{self.book.id}/copies/', {'count': bad_count}, format='json')
+            self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 2. Borrow sole copy, add user to waitlist, then add a new copy -> waitlist must be notified
+        self.client.force_authenticate(user=self.other_user)
+        b_res = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(b_res.status_code, status.HTTP_201_CREATED)
+        first_copy_id = b_res.data['borrowing']['copy_id']
+
+        waiter = User.objects.create_user(username='waiter1', email='w1@example.com', password='password123')
+        self.client.force_authenticate(user=waiter)
+        wait_res = self.client.post(f'/api/books/{self.book.id}/reserve/')
+        self.assertEqual(wait_res.status_code, status.HTTP_200_OK)
+
+        # Anonymous and regular non-staff users must NOT see current_borrower or current_borrowing_id
+        self.client.force_authenticate(user=None)
+        anon_detail = self.client.get(f'/api/books/{self.book.id}/')
+        self.assertIsNone(anon_detail.data['current_borrower'])
+        self.assertIsNone(anon_detail.data['copies'][0]['current_borrower'])
+        self.assertIsNone(anon_detail.data['copies'][0]['current_borrowing_id'])
+
+        anon_list = self.client.get('/api/books/')
+        self.assertIsNone(anon_list.data[0]['current_borrower'])
+        self.assertIsNone(anon_list.data[0]['copies'][0]['current_borrower'])
+
+        self.client.force_authenticate(user=waiter)
+        reg_detail = self.client.get(f'/api/books/{self.book.id}/')
+        self.assertIsNone(reg_detail.data['current_borrower'])
+        self.assertIsNone(reg_detail.data['copies'][0]['current_borrower'])
+
+        # Staff adds a new copy -> waiter receives a waitlist notification and staff stats show total_titles + total_books
+        self.client.force_authenticate(user=self.staff_user)
+        add_res = self.client.post(f'/api/books/{self.book.id}/copies/', {'count': 1}, format='json')
+        self.assertEqual(add_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            Notification.objects.filter(user=waiter, notif_type='waitlist').count(),
+            1
+        )
+        stats_res = self.client.get('/api/manager/stats/')
+        self.assertEqual(stats_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(stats_res.data['total_books'], 2)
+        self.assertEqual(stats_res.data['total_titles'], 1)
+
+        # 3. Return first copy, then delete that copy -> historical borrowing keeps copy_id and flags is_copy_deleted=True
+        borrowing_id = b_res.data['borrowing']['id']
+        self.client.post(f'/api/borrowings/{borrowing_id}/return/')
+        del_copy_res = self.client.delete(f'/api/books/{self.book.id}/copies/{first_copy_id}/')
+        self.assertEqual(del_copy_res.status_code, status.HTTP_200_OK)
+
+        hist_res = self.client.get(f'/api/borrowings/history/?book_id={self.book.id}')
+        self.assertEqual(hist_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(hist_res.data['results'][0]['copy_id'], first_copy_id)
+        self.assertTrue(hist_res.data['results'][0]['is_copy_deleted'])
+
+        # 4. Superuser deleting book creator (self.user) must NOT delete self.book or active borrowings of others
+        self.client.force_authenticate(user=waiter)
+        waiter_loan = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(waiter_loan.status_code, status.HTTP_201_CREATED)
+
+        superuser = User.objects.create_superuser(username='root_admin', email='ra@example.com', password='password123')
+        self.client.force_authenticate(user=superuser)
+        del_owner = self.client.delete(f'/api/auth/users/{self.user.id}/')
+        self.assertEqual(del_owner.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertTrue(Book.objects.filter(id=self.book.id).exists())
+        self.book.refresh_from_db()
+        self.assertIsNone(self.book.user)
+        self.assertTrue(Borrowing.objects.filter(id=waiter_loan.data['borrowing']['id'], return_date__isnull=True).exists())
+
 
 
 

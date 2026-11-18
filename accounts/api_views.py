@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from books.models import Book, Notification
+from books.models import Book, BookCopy, Notification
 from .models import CustomUser
 from .serializers import AdminUserSerializer, RegisterSerializer, UserSerializer
 
@@ -172,9 +172,15 @@ class SuperuserUserDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         with transaction.atomic():
-            active_book_ids = list(
-                target_user.borrowings.filter(return_date__isnull=True).values_list('book_id', flat=True)
+            active_loans = list(
+                target_user.borrowings.filter(return_date__isnull=True).values_list('book_id', 'book_copy_id')
             )
+            active_book_ids = [b_id for b_id, _ in active_loans if b_id]
+            active_copy_ids = [c_id for _, c_id in active_loans if c_id]
+            if active_copy_ids:
+                BookCopy.objects.filter(id__in=active_copy_ids).update(is_available=True)
+            response = super().destroy(request, *args, **kwargs)
             if active_book_ids:
-                Book.objects.filter(id__in=active_book_ids).update(is_available=True)
-            return super().destroy(request, *args, **kwargs)
+                for b in Book.objects.filter(id__in=active_book_ids):
+                    b.sync_availability()
+            return response

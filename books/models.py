@@ -30,7 +30,7 @@ class Category(models.Model):
 # ۲. کلاس Book را به این شکل تغییر بده
 class Book(models.Model):
     # رابطه را به تنظیمات جنگو متصل می‌کنیم تا خودش مدل کاربر درست را پیدا کند
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     title = models.CharField(max_length=200)
     author = models.CharField(max_length=200)
     description = models.TextField()
@@ -64,6 +64,33 @@ class Book(models.Model):
     def get_absolute_url(self):
         return reverse('books:book_detail', args=[self.id])
 
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new and not self.copies.exists():
+            BookCopy.objects.create(book=self, is_available=self.is_available)
+
+    def sync_availability(self):
+        has_available = self.copies.filter(is_available=True).exists()
+        if self.is_available != has_available:
+            self.is_available = has_available
+            super().save(update_fields=['is_available'])
+        return has_available
+
+
+class BookCopy(models.Model):
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='copies')
+    is_available = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = "جلد کتاب"
+        verbose_name_plural = "جلدهای کتاب"
+
+    def __str__(self):
+        return f"{self.book.title} (ID: #{self.id})"
+
 
 class Comment(models.Model):
     text = models.TextField()
@@ -88,6 +115,14 @@ class Borrowing(models.Model):
 
     user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='borrowings')
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='borrowings')
+    book_copy = models.ForeignKey(
+        BookCopy,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='borrowings'
+    )
+    copy_id_snapshot = models.PositiveIntegerField(null=True, blank=True)
     borrow_date = models.DateTimeField(auto_now_add=True)
     # به طور پیش‌فرض مهلت بازگشت را ۱۴ روز بعد در نظر می‌گیریم
     due_date = models.DateTimeField(default=default_due_date)
@@ -101,6 +136,14 @@ class Borrowing(models.Model):
         blank=True,
         related_name='processed_returns'
     )
+
+    def save(self, *args, **kwargs):
+        if self.book_copy_id and not self.copy_id_snapshot:
+            self.copy_id_snapshot = self.book_copy_id
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'copy_id_snapshot' not in update_fields:
+                kwargs['update_fields'] = list(update_fields) + ['copy_id_snapshot']
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'{self.user.username} - {self.book.title} ({self.status})'

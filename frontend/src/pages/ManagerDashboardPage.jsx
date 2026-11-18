@@ -449,6 +449,7 @@ export const ManagerDashboardPage = () => {
 
   const {
     total_books = 0,
+    total_titles = 0,
     borrowed_count = 0,
     available_count = 0,
     categories_count = 0,
@@ -609,6 +610,7 @@ export const ManagerDashboardPage = () => {
                               </strong>
                               <span style={{ fontSize: '11.5px', color: 'var(--accent2)' }}>
                                 @{rec.username}
+                                {rec.copy_id ? ` • ID: #${rec.copy_id}${rec.is_copy_deleted ? ' (حذف‌شده)' : ''}` : ''}
                               </span>
                             </div>
                           ) : (
@@ -620,11 +622,10 @@ export const ManagerDashboardPage = () => {
                               >
                                 {rec.book_details?.title || 'کتاب'}
                               </Link>
-                              {rec.book_details?.author && (
-                                <span style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
-                                  اثر {rec.book_details.author}
-                                </span>
-                              )}
+                              <span style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
+                                {rec.book_details?.author ? `اثر ${rec.book_details.author}` : ''}
+                                {rec.copy_id ? ` (ID: #${rec.copy_id}${rec.is_copy_deleted ? ' - حذف‌شده' : ''})` : ''}
+                              </span>
                             </div>
                           )}
                         </td>
@@ -683,14 +684,16 @@ export const ManagerDashboardPage = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '18px', marginBottom: '36px' }}>
         <div className="card" style={{ padding: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: '10px' }}>
-            <span style={{ fontSize: '13.5px', fontWeight: 600 }}>کل کتاب‌های ثبت‌شده</span>
+            <span style={{ fontSize: '13.5px', fontWeight: 600 }}>کل جلدهای ثبت‌شده</span>
             <BookOpen size={20} color="var(--accent2)" />
           </div>
           <div style={{ fontSize: '34px', fontWeight: 800 }}>
             {toPersianDigits(total_books)}
           </div>
           <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            مجموع کل عناوین موجود در سامانه
+            {total_titles > 0
+              ? `در ${toPersianDigits(total_titles)} عنوان کتاب در سامانه`
+              : 'مجموع کل جلدهای موجود در سامانه'}
           </div>
         </div>
 
@@ -703,7 +706,7 @@ export const ManagerDashboardPage = () => {
             {toPersianDigits(borrowed_count)}
           </div>
           <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            کتاب‌های در اختیار اعضا
+            جلدهای در اختیار اعضا
           </div>
         </div>
 
@@ -788,11 +791,19 @@ export const ManagerDashboardPage = () => {
                 required
               >
                 <option value="">-- انتخاب کتاب از لیست موجودی --</option>
-                {availableBooksDirectory.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {`${b.title} — اثر ${b.author}`}
-                  </option>
-                ))}
+                {availableBooksDirectory.flatMap((b) =>
+                  (b.available_copies && b.available_copies.length > 0
+                    ? b.available_copies
+                    : [{ id: b.id, isFallbackBookId: true }]
+                  ).map((c) => (
+                    <option
+                      key={c.isFallbackBookId ? `book-${b.id}` : `copy-${c.id}`}
+                      value={c.isFallbackBookId ? String(b.id) : `COPY:${c.id}`}
+                    >
+                      {`${b.title} — اثر ${b.author} (ID: #${c.id})`}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -1616,9 +1627,16 @@ export const ManagerDashboardPage = () => {
                         </td>
                         <td>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                            <Link to={`/books/${loan.book}`} style={{ fontWeight: 700, color: 'var(--text)' }}>
-                              {loan.book_details?.title || 'کتاب'}
-                            </Link>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <Link to={`/books/${loan.book}`} style={{ fontWeight: 700, color: 'var(--text)' }}>
+                                {loan.book_details?.title || 'کتاب'}
+                              </Link>
+                              {loan.copy_id && (
+                                <span style={{ fontSize: '11.5px', color: 'var(--muted)' }} dir="ltr">
+                                  (ID: #{loan.copy_id}{loan.is_copy_deleted ? ' - حذف‌شده' : ''})
+                                </span>
+                              )}
+                            </div>
                             <div>
                               <button
                                 type="button"
@@ -1743,18 +1761,22 @@ export const ManagerDashboardPage = () => {
                     </td>
                     <td>{formatPrice(b.price)}</td>
                     <td>
-                      {b.is_available ? (
-                        <span className="badge badge-available">موجود در قفسه</span>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                          <span className="badge badge-borrowed">امانت داده شده</span>
-                          {b.current_borrower && (
-                            <span style={{ fontSize: '12px', color: 'var(--accent2)', fontWeight: 700 }}>
-                              (امانت‌گیرنده: {b.current_borrower})
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        {b.is_available ? (
+                          <span className="badge badge-available">
+                            {`${toPersianDigits(b.available_copies_count ?? 1)} از ${toPersianDigits(b.total_copies_count ?? 1)} موجود در قفسه`}
+                          </span>
+                        ) : (
+                          <span className="badge badge-borrowed">
+                            {`${toPersianDigits(0)} از ${toPersianDigits(b.total_copies_count ?? 1)} موجود`}
+                          </span>
+                        )}
+                        {b.current_borrower && (
+                          <span style={{ fontSize: '12px', color: 'var(--accent2)', fontWeight: 700 }}>
+                            (امانت‌گیرنده: {b.current_borrower})
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td>
                       <span className="badge badge-category">

@@ -18,7 +18,8 @@ import {
   Star,
   BellPlus,
   BellOff,
-  Sparkles
+  Sparkles,
+  Plus
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -45,6 +46,8 @@ export const BookDetailPage = () => {
   const [reserving, setReserving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [togglingWishlist, setTogglingWishlist] = useState(false);
+  const [addingCopy, setAddingCopy] = useState(false);
+  const [deletingCopyId, setDeletingCopyId] = useState(null);
   const [message, setMessage] = useState(null);
 
   const fetchBook = async (shouldScrollTop = false) => {
@@ -199,6 +202,38 @@ export const BookDetailPage = () => {
     }
   };
 
+  const handleAddCopy = async () => {
+    if (addingCopy) return;
+    setAddingCopy(true);
+    try {
+      const res = await api.post(`/api/books/${id}/copies/`, { count: 1 });
+      await fetchBook();
+      showToast(res.data.message || 'جلد جدید اضافه شد.', 'success');
+    } catch (err) {
+      const errMsg = extractApiError(err, 'خطا در افزودن جلد جدید.');
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setAddingCopy(false);
+    }
+  };
+
+  const handleDeleteCopy = async (copyId) => {
+    if (deletingCopyId) return;
+    setDeletingCopyId(copyId);
+    try {
+      const res = await api.delete(`/api/books/${id}/copies/${copyId}/`);
+      await fetchBook();
+      showToast(res.data.message || 'شناسه حذف شد.', 'info');
+    } catch (err) {
+      const errMsg = extractApiError(err, 'خطا در حذف شناسه.');
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setDeletingCopyId(null);
+    }
+  };
+
   const confirmDeleteBook = async () => {
     setDeleting(true);
     try {
@@ -308,15 +343,19 @@ export const BookDetailPage = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
                 {book.is_available ? (
                   <span className="badge badge-available" style={{ fontSize: '12.5px', padding: '6px 14px' }}>
-                    موجود و آماده امانت
+                    {book.total_copies_count > 1
+                      ? `موجود در قفسه (${toPersianDigits(book.available_copies_count)} از ${toPersianDigits(book.total_copies_count)} جلد)`
+                      : 'موجود و آماده امانت'}
                   </span>
                 ) : (
                   <span className="badge badge-borrowed" style={{ fontSize: '12.5px', padding: '6px 14px' }}>
-                    در حال حاضر امانت داده شده
+                    {book.total_copies_count > 1
+                      ? `امانت داده شده (${toPersianDigits(0)} از ${toPersianDigits(book.total_copies_count)} جلد)`
+                      : 'در حال حاضر امانت داده شده'}
                   </span>
                 )}
 
-                {!book.is_available && book.current_borrower && (
+                {book.current_borrower && (
                   <span style={{ fontSize: '12.5px', color: 'var(--accent2)', fontWeight: 600 }}>
                     امانت‌گیرنده فعلی: {book.current_borrower}
                   </span>
@@ -475,6 +514,76 @@ export const BookDetailPage = () => {
                 </div>
               )}
             </div>
+
+            {/* Copies (IDs) Management for Owner/Staff/Admin */}
+            {isOwner && Array.isArray(book.copies) && book.copies.length > 0 && (
+              <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)' }}>
+                    شناسه‌های (ID) این کتاب ({toPersianDigits(book.copies.length)} جلد):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAddCopy}
+                    disabled={addingCopy}
+                    className="btn-outline"
+                    style={{ padding: '6px 12px', fontSize: '12.5px' }}
+                  >
+                    <Plus size={14} />
+                    {addingCopy ? 'در حال افزودن...' : 'افزودن جلد جدید'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {book.copies.map((copyItem) => (
+                    <div
+                      key={copyItem.id}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        background: 'var(--surface2)',
+                        border: '1px solid var(--border)',
+                        fontSize: '12.5px'
+                      }}
+                    >
+                      <strong dir="ltr" style={{ color: 'var(--text)' }}>
+                        ID: #{copyItem.id}
+                      </strong>
+                      {copyItem.is_available ? (
+                        <span className="badge badge-available" style={{ fontSize: '11px', padding: '2px 8px' }}>
+                          موجود
+                        </span>
+                      ) : (
+                        <span className="badge badge-borrowed" style={{ fontSize: '11px', padding: '2px 8px' }}>
+                          امانت {copyItem.current_borrower ? `(@${copyItem.current_borrower})` : ''}
+                        </span>
+                      )}
+                      {copyItem.is_available && book.copies.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCopy(copyItem.id)}
+                          disabled={deletingCopyId === copyItem.id}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--danger)',
+                            cursor: 'pointer',
+                            padding: '2px',
+                            display: 'inline-flex'
+                          }}
+                          title="حذف این شناسه"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -718,6 +827,7 @@ export const BookDetailPage = () => {
                           </span>
                           <span style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
                             @{rec.username}
+                            {rec.copy_id ? ` • ID: #${rec.copy_id}${rec.is_copy_deleted ? ' (حذف‌شده)' : ''}` : ''}
                           </span>
                         </div>
                       </td>

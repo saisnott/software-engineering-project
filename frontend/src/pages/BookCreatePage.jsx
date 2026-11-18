@@ -15,6 +15,7 @@ export const BookCreatePage = () => {
   const [author, setAuthor] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
+  const [copiesCount, setCopiesCount] = useState(1);
   const [category, setCategory] = useState('');
   const [coverFile, setCoverFile] = useState(null);
   const [coverPreview, setCoverPreview] = useState(null);
@@ -60,6 +61,7 @@ export const BookCreatePage = () => {
     formData.append('author', author);
     formData.append('description', description);
     formData.append('price', price);
+    formData.append('copies_count', copiesCount || 1);
     if (category) formData.append('category', category);
     if (coverFile) formData.append('covers', coverFile);
 
@@ -165,6 +167,20 @@ export const BookCreatePage = () => {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">تعداد کتاب (موجودی اولیه) *</label>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              className="form-control"
+              value={copiesCount}
+              onChange={(e) => setCopiesCount(e.target.value)}
+              dir="ltr"
+              required
+            />
           </div>
 
           <div className="form-group">

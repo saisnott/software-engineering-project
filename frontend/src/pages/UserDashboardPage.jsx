@@ -559,6 +559,9 @@ export const UserDashboardPage = () => {
 
                       <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <span>امانت‌گیرنده: <strong style={{ color: 'var(--text)' }}>{item.borrower_name || item.username || user?.username}</strong></span>
+                        {item.copy_id && (
+                          <span>شناسه کتاب: <strong dir="ltr" style={{ color: 'var(--text)' }}>#{item.copy_id}</strong></span>
+                        )}
                         <span>تاریخ امانت: {formatPersianDate(item.borrow_date)}</span>
                         <span style={{ color: isOverdue ? 'var(--danger)' : 'var(--accent2)', fontWeight: 700 }}>
                           موعد بازگشت: {formatPersianDate(item.due_date)}

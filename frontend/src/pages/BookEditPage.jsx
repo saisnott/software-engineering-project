@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowRight, Save, AlertCircle, ImagePlus, Trash2 } from 'lucide-react';
+import { ArrowRight, Save, AlertCircle, ImagePlus, Trash2, Plus } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
-import { extractApiError } from '../utils/formatters';
+import { extractApiError, toPersianDigits } from '../utils/formatters';
 
 export const BookEditPage = () => {
   const { id } = useParams();
@@ -15,6 +15,10 @@ export const BookEditPage = () => {
 
   const [categories, setCategories] = useState([]);
   const [bookOwnerId, setBookOwnerId] = useState(null);
+  const [copies, setCopies] = useState([]);
+  const [newCopiesCount, setNewCopiesCount] = useState(1);
+  const [addingCopies, setAddingCopies] = useState(false);
+  const [deletingCopyId, setDeletingCopyId] = useState(null);
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [description, setDescription] = useState('');
@@ -37,6 +41,7 @@ export const BookEditPage = () => {
         setCategories(catsRes.data);
         const b = bookRes.data;
         setBookOwnerId(b.user);
+        setCopies(b.copies || []);
         setTitle(b.title);
         setAuthor(b.author);
         setDescription(b.description);
@@ -87,6 +92,43 @@ export const BookEditPage = () => {
       showToast(errMsg, 'danger');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleAddCopies = async () => {
+    if (addingCopies) return;
+    setAddingCopies(true);
+    setError(null);
+    try {
+      const res = await api.post(`/api/books/${id}/copies/`, {
+        count: Number(newCopiesCount) || 1,
+      });
+      setCopies(res.data.copies || []);
+      setNewCopiesCount(1);
+      showToast(res.data.message || 'جلد جدید اضافه شد.', 'success');
+    } catch (err) {
+      const errMsg = extractApiError(err, 'خطا در افزودن جلد جدید.');
+      setError(errMsg);
+      showToast(errMsg, 'danger');
+    } finally {
+      setAddingCopies(false);
+    }
+  };
+
+  const handleDeleteCopy = async (copyId) => {
+    if (deletingCopyId) return;
+    setDeletingCopyId(copyId);
+    setError(null);
+    try {
+      const res = await api.delete(`/api/books/${id}/copies/${copyId}/`);
+      setCopies(res.data.copies || []);
+      showToast(res.data.message || 'شناسه حذف شد.', 'info');
+    } catch (err) {
+      const errMsg = extractApiError(err, 'خطا در حذف شناسه.');
+      setError(errMsg);
+      showToast(errMsg, 'danger');
+    } finally {
+      setDeletingCopyId(null);
     }
   };
 
@@ -284,6 +326,84 @@ export const BookEditPage = () => {
             </button>
           </div>
         </form>
+
+        {/* Copies (IDs) Management Section */}
+        <div style={{ marginTop: '36px', paddingTop: '28px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: 800 }}>
+                شناسه‌های (ID) موجود از این کتاب ({toPersianDigits(copies.length)} جلد)
+              </h2>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value={newCopiesCount}
+                onChange={(e) => setNewCopiesCount(e.target.value)}
+                className="form-control"
+                style={{ width: '80px', padding: '7px 10px' }}
+                dir="ltr"
+                aria-label="تعداد جلد جدید برای افزودن"
+              />
+              <button
+                type="button"
+                onClick={handleAddCopies}
+                disabled={addingCopies}
+                className="btn-primary"
+                style={{ padding: '8px 14px', fontSize: '13px' }}
+              >
+                <Plus size={15} />
+                {addingCopies ? 'در حال افزودن...' : 'افزودن جلد جدید'}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {copies.map((copyItem) => (
+              <div
+                key={copyItem.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  background: 'var(--surface2)',
+                  border: '1px solid var(--border)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '14px', color: 'var(--text)' }} dir="ltr">
+                    ID: #{copyItem.id}
+                  </strong>
+                  {copyItem.is_available ? (
+                    <span className="badge badge-available">موجود در قفسه</span>
+                  ) : (
+                    <span className="badge badge-borrowed">
+                      در دست امانت {copyItem.current_borrower ? `(@${copyItem.current_borrower})` : ''}
+                    </span>
+                  )}
+                </div>
+
+                {copyItem.is_available && copies.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCopy(copyItem.id)}
+                    disabled={deletingCopyId === copyItem.id}
+                    className="btn-danger"
+                    style={{ padding: '5px 10px', fontSize: '12px' }}
+                  >
+                    <Trash2 size={13} />
+                    {deletingCopyId === copyItem.id ? 'در حال حذف...' : 'حذف این ID'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

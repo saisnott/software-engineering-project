@@ -52,11 +52,15 @@ export const BookCard = ({ book, onWishlistChange }) => {
         <div className="book-card-top-badges">
           {book.is_available ? (
             <span className="badge badge-available" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
-              موجود در قفسه
+              {book.total_copies_count > 1
+                ? `موجود در قفسه (${toPersianDigits(book.available_copies_count)} از ${toPersianDigits(book.total_copies_count)})`
+                : 'موجود در قفسه'}
             </span>
           ) : (
             <span className="badge badge-borrowed" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
-              امانت داده شده
+              {book.total_copies_count > 1
+                ? `امانت داده شده (${toPersianDigits(0)} از ${toPersianDigits(book.total_copies_count)})`
+                : 'امانت داده شده'}
             </span>
           )}
 

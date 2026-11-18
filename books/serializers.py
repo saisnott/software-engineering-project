@@ -1,7 +1,31 @@
 from django.db.models import Avg
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Book, Borrowing, Category, Comment, Notification
+from .models import Book, BookCopy, Borrowing, Category, Comment, Notification
+
+
+def _can_view_borrower(request):
+    user = getattr(request, 'user', None)
+    return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
+
+
+def get_book_current_borrower(obj, request=None):
+    if not _can_view_borrower(request):
+        return None
+    if hasattr(obj, 'prefetched_active_borrowings'):
+        active_loans = obj.prefetched_active_borrowings
+    else:
+        active_loans = list(obj.borrowings.filter(return_date__isnull=True).select_related('user').order_by('id'))
+    if not active_loans:
+        return None
+    names = []
+    for loan in active_loans:
+        if loan.user:
+            full_name = f"{loan.user.first_name} {loan.user.last_name}".strip()
+            name = full_name if full_name else loan.user.username
+            if name not in names:
+                names.append(name)
+    return '، '.join(names) if names else None
 
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -33,6 +57,44 @@ class CommentSerializer(serializers.ModelSerializer):
         return value
 
 
+class BookCopySerializer(serializers.ModelSerializer):
+    current_borrower = serializers.SerializerMethodField()
+    current_borrowing_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BookCopy
+        fields = ['id', 'book', 'is_available', 'created_at', 'current_borrower', 'current_borrowing_id']
+        read_only_fields = ['id', 'book', 'is_available', 'created_at', 'current_borrower', 'current_borrowing_id']
+
+    def _get_active_borrowing(self, obj):
+        if not _can_view_borrower(self.context.get('request')):
+            return None
+        if hasattr(obj, 'prefetched_active_borrowings'):
+            active_list = obj.prefetched_active_borrowings
+            return active_list[0] if active_list else None
+        cache = getattr(self, '_active_borrowing_cache', None)
+        if cache is None:
+            cache = {}
+            self._active_borrowing_cache = cache
+        if obj.id not in cache:
+            cache[obj.id] = obj.borrowings.filter(return_date__isnull=True).select_related('user').first()
+        return cache[obj.id]
+
+    def get_current_borrower(self, obj):
+        if obj.is_available:
+            return None
+        active = self._get_active_borrowing(obj)
+        if active and active.user:
+            return active.user.username
+        return None
+
+    def get_current_borrowing_id(self, obj):
+        if obj.is_available:
+            return None
+        active = self._get_active_borrowing(obj)
+        return active.id if active else None
+
+
 class BookListSerializer(serializers.ModelSerializer):
     book_code = serializers.SerializerMethodField()
     category_name = serializers.ReadOnlyField(source='category.name')
@@ -43,6 +105,9 @@ class BookListSerializer(serializers.ModelSerializer):
     is_wishlisted = serializers.SerializerMethodField()
     current_borrower = serializers.SerializerMethodField()
     total_borrows_count = serializers.IntegerField(source='borrowings.count', read_only=True)
+    total_copies_count = serializers.SerializerMethodField()
+    available_copies_count = serializers.SerializerMethodField()
+    copies = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -50,12 +115,22 @@ class BookListSerializer(serializers.ModelSerializer):
             'id', 'book_code', 'title', 'author', 'price', 'covers', 'is_available',
             'category', 'category_name', 'category_slug', 'comments_count',
             'average_rating', 'user', 'author_username', 'is_wishlisted',
-            'current_borrower', 'total_borrows_count'
+            'current_borrower', 'total_borrows_count',
+            'total_copies_count', 'available_copies_count', 'copies'
         ]
         read_only_fields = ['id', 'book_code', 'user', 'is_available']
 
     def get_book_code(self, obj):
         return f"LIB-B{obj.id:04d}"
+
+    def get_total_copies_count(self, obj):
+        return len(obj.copies.all())
+
+    def get_available_copies_count(self, obj):
+        return sum(1 for c in obj.copies.all() if c.is_available)
+
+    def get_copies(self, obj):
+        return BookCopySerializer(obj.copies.all(), many=True, context=self.context).data
 
     def get_comments_count(self, obj):
         return obj.comments.filter(is_active=True).count()
@@ -71,17 +146,13 @@ class BookListSerializer(serializers.ModelSerializer):
         return False
 
     def get_current_borrower(self, obj):
-        if obj.is_available:
-            return None
-        active = obj.borrowings.filter(return_date__isnull=True).select_related('user').first()
-        if active and active.user:
-            full_name = f"{active.user.first_name} {active.user.last_name}".strip()
-            return full_name if full_name else active.user.username
-        return None
+        return get_book_current_borrower(obj, request=self.context.get('request'))
 
 
 class BorrowingSerializer(serializers.ModelSerializer):
     book_details = BookListSerializer(source='book', read_only=True)
+    copy_id = serializers.SerializerMethodField()
+    is_copy_deleted = serializers.SerializerMethodField()
     username = serializers.ReadOnlyField(source='user.username')
     user_email = serializers.ReadOnlyField(source='user.email')
     borrower_name = serializers.SerializerMethodField()
@@ -95,14 +166,20 @@ class BorrowingSerializer(serializers.ModelSerializer):
         model = Borrowing
         fields = [
             'id', 'user', 'username', 'user_email', 'borrower_name', 'book',
-            'book_details', 'borrow_date', 'due_date', 'return_date',
+            'book_copy', 'copy_id', 'is_copy_deleted', 'book_details', 'borrow_date', 'due_date', 'return_date',
             'status', 'is_extended', 'returned_by', 'returned_by_username',
             'returned_by_label', 'duration_days', 'is_late', 'late_days'
         ]
         read_only_fields = [
-            'id', 'user', 'borrow_date', 'return_date', 'status',
+            'id', 'user', 'book_copy', 'copy_id', 'is_copy_deleted', 'borrow_date', 'return_date', 'status',
             'is_extended', 'returned_by'
         ]
+
+    def get_copy_id(self, obj):
+        return obj.book_copy_id or obj.copy_id_snapshot
+
+    def get_is_copy_deleted(self, obj):
+        return bool(obj.book_copy_id is None and obj.copy_id_snapshot is not None)
 
     def get_borrower_name(self, obj):
         if not obj.user:
@@ -157,6 +234,10 @@ class BookDetailSerializer(serializers.ModelSerializer):
     current_borrower = serializers.SerializerMethodField()
     total_borrows_count = serializers.IntegerField(source='borrowings.count', read_only=True)
     borrowing_history = serializers.SerializerMethodField()
+    total_copies_count = serializers.SerializerMethodField()
+    available_copies_count = serializers.SerializerMethodField()
+    copies = serializers.SerializerMethodField()
+    copies_count = serializers.IntegerField(write_only=True, required=False, min_value=1, max_value=100, default=1)
 
     class Meta:
         model = Book
@@ -166,12 +247,22 @@ class BookDetailSerializer(serializers.ModelSerializer):
             'author_username', 'comments', 'average_rating', 'ratings_count',
             'is_borrowed_by_user', 'is_wishlisted', 'is_reserved_by_user',
             'waitlist_count', 'related_books', 'current_borrower',
-            'total_borrows_count', 'borrowing_history'
+            'total_borrows_count', 'borrowing_history',
+            'total_copies_count', 'available_copies_count', 'copies', 'copies_count'
         ]
         read_only_fields = ['id', 'book_code', 'qr_payload', 'user', 'is_available']
 
     def get_book_code(self, obj):
         return f"LIB-B{obj.id:04d}"
+
+    def get_total_copies_count(self, obj):
+        return len(obj.copies.all())
+
+    def get_available_copies_count(self, obj):
+        return sum(1 for c in obj.copies.all() if c.is_available)
+
+    def get_copies(self, obj):
+        return BookCopySerializer(obj.copies.all(), many=True, context=self.context).data
 
     def get_qr_payload(self, obj):
         return f"BOOKSTORE-BOOK:LIB-B{obj.id:04d}|ID:{obj.id}"
@@ -215,13 +306,7 @@ class BookDetailSerializer(serializers.ModelSerializer):
         return False
 
     def get_current_borrower(self, obj):
-        if obj.is_available:
-            return None
-        active = obj.borrowings.filter(return_date__isnull=True).select_related('user').first()
-        if active and active.user:
-            full_name = f"{active.user.first_name} {active.user.last_name}".strip()
-            return full_name if full_name else active.user.username
-        return None
+        return get_book_current_borrower(obj, request=self.context.get('request'))
 
     def get_borrowing_history(self, obj):
         request = self.context.get('request')
