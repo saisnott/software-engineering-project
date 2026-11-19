@@ -212,6 +212,7 @@ export const UserDashboardPage = () => {
     borrowing_history = [],
     wishlist = [],
     waitlist = [],
+    submitted_books = [],
     reading_stats = {},
     activity_timeline = []
   } = dashboardData || {};
@@ -610,6 +611,52 @@ export const UserDashboardPage = () => {
           </div>
         )}
       </div>
+
+      {/* 1.5. User's Submitted Books & Approval Status */}
+      {submitted_books.length > 0 && (
+        <div style={{ marginBottom: '48px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+            <div>
+              <h2 style={{ fontSize: '21px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <PlusCircle size={22} color="var(--accent2)" />
+                کتاب‌های ثبت‌شده توسط من و وضعیت تأیید ({toPersianDigits(submitted_books.length)})
+              </h2>
+              <p style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px' }}>
+                وضعیت بررسی و انتشار کتاب‌هایی که به کتابخانه اضافه کرده‌اید
+              </p>
+            </div>
+          </div>
+
+          <div className="books-grid">
+            {submitted_books.map((book) => (
+              <div key={book.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <BookCard book={book} onWishlistChange={handleWishlistUpdated} />
+                {book.approval_status === 'rejected' && (
+                  <div
+                    className="card"
+                    style={{
+                      padding: '10px 14px',
+                      background: 'var(--danger-bg)',
+                      borderColor: 'rgba(220, 38, 38, 0.35)',
+                      fontSize: '12.5px'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: 'var(--danger)', marginBottom: '4px' }}>
+                      رد شده: {book.rejection_reason || 'نیازمند اصلاح مشخصات'}
+                    </div>
+                    <Link
+                      to={`/books/${book.id}/edit`}
+                      style={{ color: 'var(--accent2)', fontWeight: 700, textDecoration: 'underline' }}
+                    >
+                      ویرایش و ارسال مجدد برای بررسی
+                    </Link>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 2. Waitlist / Reserved Books */}
       {waitlist.length > 0 && (

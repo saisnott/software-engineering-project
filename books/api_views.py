@@ -42,6 +42,8 @@ def _parse_strict_int_in_range(raw_value, min_val=1, max_val=50):
 
 
 def _notify_waitlist_available(book, message):
+    if getattr(book, 'approval_status', 'approved') != 'approved':
+        return
     waitlist_users = list(book.waitlist.all())
     for w_user in waitlist_users:
         Notification.objects.create(
@@ -51,6 +53,43 @@ def _notify_waitlist_available(book, message):
             notif_type='waitlist',
             link=f'/books/{book.id}'
         )
+
+
+def _notify_staff_book_pending(book, actor, is_edit=False):
+    staff_users = list(
+        User.objects.filter(
+            Q(is_staff=True) | Q(is_superuser=True),
+            is_active=True
+        ).exclude(id=actor.id)
+    )
+    action_text = 'ویرایش شد و مجدداً در انتظار بررسی است' if is_edit else 'ثبت شد و در انتظار بررسی و تأیید است'
+    staff_title = 'درخواست بررسی مجدد کتاب ویرایش‌شده' if is_edit else 'درخواست بررسی و تأیید کتاب جدید'
+    staff_notifs = [
+        Notification(
+            user=s_user,
+            title=staff_title,
+            message=f"کتاب «{book.title}» اثر {book.author} توسط کاربر @{actor.username} {action_text}.",
+            notif_type='approval',
+            link='/manager/dashboard'
+        )
+        for s_user in staff_users
+    ]
+    if staff_notifs:
+        Notification.objects.bulk_create(staff_notifs)
+
+    user_title = 'ارسال مجدد کتاب برای بررسی مدیریت' if is_edit else 'کتاب شما در صف بررسی قرار گرفت'
+    user_msg = (
+        f"تغییرات کتاب «{book.title}» ذخیره شد و پس از بررسی و تأیید مدیر یا کارمند کتابخانه در کاتالوگ منتشر خواهد شد."
+        if is_edit
+        else f"کتاب «{book.title}» با موفقیت ثبت شد و هم‌اکنون در انتظار بررسی و تأیید مدیر یا کارمند کتابخانه است."
+    )
+    Notification.objects.create(
+        user=actor,
+        title=user_title,
+        message=user_msg,
+        notif_type='approval',
+        link=f'/books/{book.id}'
+    )
 
 
 def _with_copy_prefetches(queryset, user=None):
@@ -171,10 +210,29 @@ class BookListCreateAPIView(generics.ListCreateAPIView):
         return BookListSerializer
 
     def get_queryset(self):
+        user = getattr(self.request, 'user', None)
         queryset = _with_copy_prefetches(
-            Book.objects.select_related('category', 'user').all(),
-            getattr(self.request, 'user', None)
+            Book.objects.select_related('category', 'user', 'reviewed_by').all(),
+            user
         )
+
+        is_staff_or_super = bool(user and getattr(user, 'is_authenticated', False) and (user.is_staff or user.is_superuser))
+        approval_param = self.request.query_params.get('approval_status')
+
+        if is_staff_or_super:
+            if approval_param in ('pending', 'approved', 'rejected'):
+                queryset = queryset.filter(approval_status=approval_param)
+            else:
+                queryset = queryset.filter(Q(approval_status='approved') | Q(approval_status='pending'))
+        elif user and getattr(user, 'is_authenticated', False):
+            if approval_param == 'pending':
+                queryset = queryset.filter(user=user, approval_status='pending')
+            elif approval_param == 'approved':
+                queryset = queryset.filter(approval_status='approved')
+            else:
+                queryset = queryset.filter(Q(approval_status='approved') | Q(user=user, approval_status='pending'))
+        else:
+            queryset = queryset.filter(approval_status='approved')
 
         category_slug = self.request.query_params.get('category')
         if category_slug:
@@ -183,14 +241,12 @@ class BookListCreateAPIView(generics.ListCreateAPIView):
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(
-                title__icontains=search_query
-            ) | queryset.filter(
-                author__icontains=search_query
+                Q(title__icontains=search_query) | Q(author__icontains=search_query)
             )
 
         status_filter = self.request.query_params.get('status')
         if status_filter == 'available':
-            queryset = queryset.filter(is_available=True)
+            queryset = queryset.filter(is_available=True, approval_status='approved')
 
         sort = self.request.query_params.get('sort')
         if sort == 'newest':
@@ -207,7 +263,19 @@ class BookListCreateAPIView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         raw_copies = serializer.validated_data.pop('copies_count', 1)
         copies_count = max(1, min(100, int(raw_copies or 1)))
-        book = serializer.save(user=self.request.user, is_available=True)
+        user = self.request.user
+        is_staff_or_super = bool(user.is_staff or user.is_superuser)
+        approval_status = 'approved' if is_staff_or_super else 'pending'
+        reviewed_by = user if is_staff_or_super else None
+        reviewed_at = timezone.now() if is_staff_or_super else None
+
+        book = serializer.save(
+            user=user,
+            is_available=True,
+            approval_status=approval_status,
+            reviewed_by=reviewed_by,
+            reviewed_at=reviewed_at,
+        )
         existing_count = book.copies.count()
         if copies_count > existing_count:
             BookCopy.objects.bulk_create([
@@ -215,6 +283,8 @@ class BookListCreateAPIView(generics.ListCreateAPIView):
                 for _ in range(copies_count - existing_count)
             ])
         book.sync_availability()
+        if approval_status == 'pending':
+            _notify_staff_book_pending(book, user, is_edit=False)
 
 
 class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
@@ -222,15 +292,33 @@ class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsOwnerOrReadOnly]
 
     def get_queryset(self):
-        return _with_copy_prefetches(
-            Book.objects.select_related('category', 'user').prefetch_related('comments__user').all(),
-            getattr(self.request, 'user', None)
+        user = getattr(self.request, 'user', None)
+        qs = _with_copy_prefetches(
+            Book.objects.select_related('category', 'user', 'reviewed_by').prefetch_related('comments__user').all(),
+            user
         )
+        if user and getattr(user, 'is_authenticated', False):
+            if user.is_staff or user.is_superuser:
+                return qs
+            return qs.filter(Q(approval_status='approved') | Q(user=user))
+        return qs.filter(approval_status='approved')
 
     def perform_update(self, serializer):
         serializer.validated_data.pop('copies_count', None)
-        book = serializer.save()
-        book.sync_availability()
+        user = self.request.user
+        is_staff_or_super = bool(user.is_staff or user.is_superuser)
+        if not is_staff_or_super:
+            book = serializer.save(
+                approval_status='pending',
+                rejection_reason='',
+                reviewed_by=None,
+                reviewed_at=None,
+            )
+            book.sync_availability()
+            _notify_staff_book_pending(book, user, is_edit=True)
+        else:
+            book = serializer.save()
+            book.sync_availability()
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -240,6 +328,90 @@ class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         return super().destroy(request, *args, **kwargs)
+
+
+class BookApprovalReviewAPIView(APIView):
+    """
+    Allows Admin (superuser) or Staff to approve or reject a submitted book.
+    POST /api/books/<pk>/review/ with {'action': 'approve' | 'reject', 'rejection_reason': '...'}
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, pk):
+        action = str(request.data.get('action') or '').strip().lower()
+        if action not in ('approve', 'reject'):
+            return Response(
+                {'error': 'عملیات نامعتبر است. مقدار action باید approve یا reject باشد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            book = get_object_or_404(Book.objects.select_for_update(), id=pk)
+
+            if action == 'approve':
+                book.approval_status = 'approved'
+                book.reviewed_by = request.user
+                book.reviewed_at = timezone.now()
+                book.rejection_reason = ''
+                book.save(update_fields=['approval_status', 'reviewed_by', 'reviewed_at', 'rejection_reason'])
+                book.sync_availability()
+
+                if book.user_id and book.user_id != request.user.id:
+                    Notification.objects.create(
+                        user=book.user,
+                        title='تأیید و انتشار کتاب شما',
+                        message=(
+                            f"کتاب «{book.title}» پس از بررسی توسط مدیریت (@{request.user.username}) تأیید شد "
+                            f"و هم‌اکنون در کاتالوگ عمومی کتابخانه قابل مشاهده و امانت‌گیری است."
+                        ),
+                        notif_type='approval',
+                        link=f'/books/{book.id}'
+                    )
+
+                refreshed = _with_copy_prefetches(
+                    Book.objects.select_related('category', 'user', 'reviewed_by').prefetch_related('comments__user'),
+                    request.user
+                ).get(pk=book.pk)
+                return Response({
+                    'message': f'کتاب «{book.title}» با موفقیت تأیید و در کاتالوگ عمومی منتشر شد.',
+                    'book': BookDetailSerializer(refreshed, context={'request': request}).data,
+                }, status=status.HTTP_200_OK)
+
+            # action == 'reject'
+            if Borrowing.objects.filter(book=book, return_date__isnull=True).exists():
+                return Response(
+                    {'error': 'این کتاب هم‌اکنون در دست امانت است و تا زمان بازگشت امکان رد یا تعلیق آن وجود ندارد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            reason = str(request.data.get('rejection_reason') or '').strip()
+            final_reason = reason or 'عدم انطباق مشخصات کتاب با ضوابط و استانداردهای کتابخانه'
+            book.approval_status = 'rejected'
+            book.reviewed_by = request.user
+            book.reviewed_at = timezone.now()
+            book.rejection_reason = final_reason
+            book.save(update_fields=['approval_status', 'reviewed_by', 'reviewed_at', 'rejection_reason'])
+
+            if book.user_id and book.user_id != request.user.id:
+                Notification.objects.create(
+                    user=book.user,
+                    title='عدم تأیید کتاب ثبت‌شده',
+                    message=(
+                        f"کتاب «{book.title}» پس از بررسی توسط مدیریت (@{request.user.username}) تأیید نشد. "
+                        f"علت: {final_reason}. می‌توانید پس از ویرایش و اصلاح، مجدداً آن را برای بررسی ارسال نمایید."
+                    ),
+                    notif_type='approval',
+                    link=f'/books/{book.id}'
+                )
+
+            refreshed = _with_copy_prefetches(
+                Book.objects.select_related('category', 'user', 'reviewed_by').prefetch_related('comments__user'),
+                request.user
+            ).get(pk=book.pk)
+            return Response({
+                'message': f'درخواست انتشار کتاب «{book.title}» رد شد و به کاربر اطلاع‌رسانی گردید.',
+                'book': BookDetailSerializer(refreshed, context={'request': request}).data,
+            }, status=status.HTTP_200_OK)
 
 
 class BookCopyCreateAPIView(APIView):
@@ -324,6 +496,16 @@ class CommentCreateAPIView(generics.CreateAPIView):
     serializer_class = CommentSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def create(self, request, *args, **kwargs):
+        book_id = self.kwargs.get('book_id')
+        book = get_object_or_404(Book, id=book_id)
+        if book.approval_status != 'approved':
+            return Response(
+                {'error': 'امکان ثبت دیدگاه برای کتابی که هنوز توسط مدیریت تأیید نشده است وجود ندارد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         book_id = self.kwargs.get('book_id')
         book = get_object_or_404(Book, id=book_id)
@@ -344,6 +526,12 @@ class BorrowBookAPIView(APIView):
     def post(self, request, pk):
         with transaction.atomic():
             book = get_object_or_404(Book.objects.select_for_update(), id=pk)
+
+            if book.approval_status != 'approved':
+                return Response(
+                    {"error": "این کتاب هنوز توسط مدیریت کتابخانه تأیید نشده است و امکان امانت‌گیری آن وجود ندارد."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             if Borrowing.objects.filter(book=book, user=request.user, return_date__isnull=True).exists():
                 return Response(
@@ -492,6 +680,11 @@ class ToggleWishlistAPIView(APIView):
 
     def post(self, request, pk):
         book = get_object_or_404(Book, id=pk)
+        if book.approval_status != 'approved':
+            return Response(
+                {'error': 'امکان افزودن کتاب تأییدنشده به لیست علاقه‌مندی‌ها وجود ندارد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         if book.wishlist.filter(id=request.user.id).exists():
             book.wishlist.remove(request.user)
             return Response({
@@ -511,6 +704,11 @@ class ToggleReservationAPIView(APIView):
 
     def post(self, request, pk):
         book = get_object_or_404(Book, id=pk)
+        if book.approval_status != 'approved':
+            return Response(
+                {"error": "این کتاب هنوز توسط مدیریت تأیید نشده است و امکان رزرو آن وجود ندارد."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if book.waitlist.filter(id=request.user.id).exists():
             book.waitlist.remove(request.user)
@@ -549,8 +747,12 @@ class UserDashboardAPIView(APIView):
         borrowing_history = [b for b in all_user_borrowings if b.return_date is not None]
         borrowing_history.sort(key=lambda x: x.return_date, reverse=True)
 
-        wishlist_books = request.user.wishlist_books.all()
-        waitlist_books = request.user.waitlist_books.all()
+        wishlist_books = request.user.wishlist_books.filter(approval_status='approved')
+        waitlist_books = request.user.waitlist_books.filter(approval_status='approved')
+        submitted_books = _with_copy_prefetches(
+            Book.objects.filter(user=request.user).select_related('category', 'user', 'reviewed_by').order_by('-id'),
+            request.user
+        )
 
         # Compute reading stats
         now = timezone.now()
@@ -658,6 +860,7 @@ class UserDashboardAPIView(APIView):
             'borrowing_history': BorrowingSerializer(borrowing_history, many=True, context={'request': request}).data,
             'wishlist': BookListSerializer(wishlist_books, many=True, context={'request': request}).data,
             'waitlist': BookListSerializer(waitlist_books, many=True, context={'request': request}).data,
+            'submitted_books': BookListSerializer(submitted_books, many=True, context={'request': request}).data,
             'reading_stats': {
                 'total_borrowed': total_borrowed,
                 'total_returned': total_returned,
@@ -750,17 +953,27 @@ class LibraryManagerStatsAPIView(APIView):
 
     def get(self, request):
         now = timezone.now()
-        total_copies = BookCopy.objects.count()
-        total_titles = Book.objects.count()
+        approved_copies_qs = BookCopy.objects.filter(book__approval_status='approved')
+        approved_titles_qs = Book.objects.filter(approval_status='approved')
+        total_copies = approved_copies_qs.count()
+        total_titles = approved_titles_qs.count()
         total_books = total_copies if total_copies > 0 else total_titles
-        borrowed_count = BookCopy.objects.filter(is_available=False).count()
+        borrowed_count = approved_copies_qs.filter(is_available=False).count()
         available_count = max(0, total_books - borrowed_count)
         categories = Category.objects.all()
         categories_count = categories.count()
         recent_books = _with_copy_prefetches(
-            Book.objects.select_related('category', 'user').order_by('-id'),
+            Book.objects.select_related('category', 'user', 'reviewed_by').order_by('-id'),
             request.user
-        )[:20]
+        )[:30]
+        pending_books_qs = _with_copy_prefetches(
+            Book.objects.filter(approval_status='pending').select_related('category', 'user', 'reviewed_by').order_by('-id'),
+            request.user
+        )
+        rejected_books_qs = _with_copy_prefetches(
+            Book.objects.filter(approval_status='rejected').select_related('category', 'user', 'reviewed_by').order_by('-id'),
+            request.user
+        )
 
         active_borrowings = list(
             Borrowing.objects.filter(return_date__isnull=True)
@@ -796,7 +1009,7 @@ class LibraryManagerStatsAPIView(APIView):
                 'has_overdue': u.id in overdue_users_set,
             })
 
-        books_qs = Book.objects.select_related('category').prefetch_related('copies').order_by('-is_available', 'title')
+        books_qs = Book.objects.filter(approval_status='approved').select_related('category').prefetch_related('copies').order_by('-is_available', 'title')
         books_directory = []
         for b in books_qs:
             all_copies = list(b.copies.all())
@@ -829,12 +1042,19 @@ class LibraryManagerStatsAPIView(APIView):
             for n in recent_notifs
         ]
 
+        pending_books_list = list(pending_books_qs)
+        rejected_books_list = list(rejected_books_qs)
+
         return Response({
             'total_books': total_books,
             'total_titles': total_titles,
             'borrowed_count': borrowed_count,
             'available_count': available_count,
             'categories_count': categories_count,
+            'pending_books_count': len(pending_books_list),
+            'rejected_books_count': len(rejected_books_list),
+            'pending_books': BookListSerializer(pending_books_list, many=True, context={'request': request}).data,
+            'rejected_books': BookListSerializer(rejected_books_list, many=True, context={'request': request}).data,
             'recent_books': BookListSerializer(recent_books, many=True, context={'request': request}).data,
             'active_borrowings': BorrowingSerializer(active_borrowings, many=True, context={'request': request}).data,
             'all_borrowings': BorrowingSerializer(all_borrowings, many=True, context={'request': request}).data,
@@ -1004,6 +1224,11 @@ class StaffQuickBorrowAPIView(APIView):
 
         with transaction.atomic():
             book = Book.objects.select_for_update().get(pk=resolved_book.pk)
+            if book.approval_status != 'approved':
+                return Response(
+                    {'error': f'کتاب «{book.title}» هنوز در وضعیت تأییدشده قرار ندارد. لطفاً ابتدا آن را تأیید کنید.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             if Borrowing.objects.filter(book=book, user=target_user, return_date__isnull=True).exists():
                 return Response(
                     {'error': f'کاربر @{target_user.username} هم‌اکنون یک جلد از کتاب «{book.title}» را در دست امانت دارد.'},

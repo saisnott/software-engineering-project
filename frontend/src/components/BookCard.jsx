@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Book as BookIcon, MessageSquare, Heart, ArrowUpLeft, Star } from 'lucide-react';
+import { Book as BookIcon, MessageSquare, Heart, ArrowUpLeft, Star, Clock, XCircle } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice, toPersianDigits } from '../utils/formatters';
@@ -8,7 +8,9 @@ import { formatPrice, toPersianDigits } from '../utils/formatters';
 export const BookCard = ({ book, onWishlistChange }) => {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const expectedWishlist = isAuthenticated && Boolean(book.is_wishlisted);
+  const approvalStatus = book.approval_status || 'approved';
+  const isApproved = approvalStatus === 'approved';
+  const expectedWishlist = isAuthenticated && isApproved && Boolean(book.is_wishlisted);
   const [wishlisted, setWishlisted] = useState(expectedWishlist);
   const [syncKey, setSyncKey] = useState(`${book.id}:${expectedWishlist}`);
   const [togglingWishlist, setTogglingWishlist] = useState(false);
@@ -50,7 +52,28 @@ export const BookCard = ({ book, onWishlistChange }) => {
     <div className="book-card">
       <div className="book-card-cover-wrap">
         <div className="book-card-top-badges">
-          {book.is_available ? (
+          {approvalStatus === 'pending' ? (
+            <span
+              className="badge badge-category"
+              style={{
+                backdropFilter: 'blur(8px)',
+                background: 'var(--surface-glass)',
+                borderColor: 'rgba(232, 168, 56, 0.65)',
+                color: 'var(--accent2)'
+              }}
+            >
+              <Clock size={12} />
+              در انتظار تأیید (Pending)
+            </span>
+          ) : approvalStatus === 'rejected' ? (
+            <span
+              className="badge badge-borrowed"
+              style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}
+            >
+              <XCircle size={12} />
+              رد شده توسط مدیریت
+            </span>
+          ) : book.is_available ? (
             <span className="badge badge-available" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
               {book.total_copies_count > 1
                 ? `موجود در قفسه (${toPersianDigits(book.available_copies_count)} از ${toPersianDigits(book.total_copies_count)})`
@@ -64,15 +87,17 @@ export const BookCard = ({ book, onWishlistChange }) => {
             </span>
           )}
 
-          <button
-            type="button"
-            onClick={handleWishlistClick}
-            className={`wishlist-btn ${wishlisted ? 'active' : ''}`}
-            title={wishlisted ? 'حذف از علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها'}
-            aria-label={wishlisted ? 'حذف از علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها'}
-          >
-            <Heart size={16} fill={wishlisted ? 'currentColor' : 'none'} />
-          </button>
+          {isApproved && (
+            <button
+              type="button"
+              onClick={handleWishlistClick}
+              className={`wishlist-btn ${wishlisted ? 'active' : ''}`}
+              title={wishlisted ? 'حذف از علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها'}
+              aria-label={wishlisted ? 'حذف از علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها'}
+            >
+              <Heart size={16} fill={wishlisted ? 'currentColor' : 'none'} />
+            </button>
+          )}
         </div>
 
         <Link to={`/books/${book.id}`} className="book-card-cover">

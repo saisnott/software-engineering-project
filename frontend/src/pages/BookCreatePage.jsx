@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ArrowRight, Upload, AlertCircle, ImagePlus, Trash2 } from 'lucide-react';
+import { ArrowRight, Upload, AlertCircle, ImagePlus, Trash2, Clock } from 'lucide-react';
 import api from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { extractApiError } from '../utils/formatters';
 
 export const BookCreatePage = () => {
   const navigate = useNavigate();
-  const { showToast } = useNotifications();
+  const { user } = useAuth();
+  const { showToast, refreshNotifications } = useNotifications();
   const fileInputRef = useRef(null);
+  const isStaffOrAdmin = Boolean(user?.is_staff || user?.is_superuser);
 
   const [categories, setCategories] = useState([]);
   const [title, setTitle] = useState('');
@@ -69,7 +72,15 @@ export const BookCreatePage = () => {
       const res = await api.post('/api/books/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      showToast(`کتاب «${title}» با موفقیت در کتابخانه منتشر شد.`, 'success');
+      await refreshNotifications();
+      if (res.data.approval_status === 'pending') {
+        showToast(
+          `کتاب «${title}» ثبت شد و پس از بررسی و تأیید ادمین یا کارمند در کاتالوگ عمومی منتشر خواهد شد.`,
+          'info'
+        );
+      } else {
+        showToast(`کتاب «${title}» با موفقیت در کتابخانه منتشر شد.`, 'success');
+      }
       navigate(`/books/${res.data.id}`);
     } catch (err) {
       console.error(err);
@@ -101,9 +112,34 @@ export const BookCreatePage = () => {
         <h1 style={{ fontSize: '26px', fontWeight: 800, marginBottom: '8px' }}>
           افزودن کتاب جدید به کتابخانه
         </h1>
-        <p style={{ color: 'var(--text-dim)', fontSize: '14px', marginBottom: '24px' }}>
-          مشخصات کتاب، دسته‌بندی و تصویر جلد آن را وارد کنید تا در کاتالوگ منتشر شود.
+        <p style={{ color: 'var(--text-dim)', fontSize: '14px', marginBottom: '18px' }}>
+          {isStaffOrAdmin
+            ? 'مشخصات کتاب، دسته‌بندی و تصویر جلد آن را وارد کنید تا مستقیماً در کاتالوگ منتشر شود.'
+            : 'مشخصات کتاب، دسته‌بندی و تصویر جلد آن را وارد کنید تا برای بررسی و تأیید مدیریت ارسال شود.'}
         </p>
+
+        {!isStaffOrAdmin && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '12px 16px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--accent-soft)',
+              border: '1px solid rgba(232, 168, 56, 0.35)',
+              color: 'var(--accent2)',
+              fontSize: '13.5px',
+              fontWeight: 600,
+              marginBottom: '22px'
+            }}
+          >
+            <Clock size={18} style={{ flexShrink: 0 }} />
+            <span>
+              کتاب‌های ثبت‌شده توسط کاربران ابتدا در وضعیت «در انتظار تأیید (Pending)» قرار می‌گیرند و پس از تأیید کارمند یا مدیر کتابخانه برای عموم قابل مشاهده و امانت‌گیری خواهند بود.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="alert alert-danger">
@@ -260,7 +296,11 @@ export const BookCreatePage = () => {
             </Link>
             <button type="submit" disabled={submitting} className="btn-primary">
               <Upload size={16} />
-              {submitting ? 'در حال ثبت کتاب...' : 'ذخیره و انتشار کتاب'}
+              {submitting
+                ? 'در حال ثبت کتاب...'
+                : isStaffOrAdmin
+                  ? 'ذخیره و انتشار کتاب'
+                  : 'ثبت و ارسال برای تأیید'}
             </button>
           </div>
         </form>

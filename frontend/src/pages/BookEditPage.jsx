@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowRight, Save, AlertCircle, ImagePlus, Trash2, Plus } from 'lucide-react';
+import { ArrowRight, Save, AlertCircle, ImagePlus, Trash2, Plus, Clock } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -10,11 +10,13 @@ export const BookEditPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
-  const { showToast } = useNotifications();
+  const { showToast, refreshNotifications } = useNotifications();
   const fileInputRef = useRef(null);
 
   const [categories, setCategories] = useState([]);
   const [bookOwnerId, setBookOwnerId] = useState(null);
+  const [approvalStatus, setApprovalStatus] = useState('approved');
+  const [rejectionReason, setRejectionReason] = useState('');
   const [copies, setCopies] = useState([]);
   const [newCopiesCount, setNewCopiesCount] = useState(1);
   const [addingCopies, setAddingCopies] = useState(false);
@@ -41,6 +43,8 @@ export const BookEditPage = () => {
         setCategories(catsRes.data);
         const b = bookRes.data;
         setBookOwnerId(b.user);
+        setApprovalStatus(b.approval_status || 'approved');
+        setRejectionReason(b.rejection_reason || '');
         setCopies(b.copies || []);
         setTitle(b.title);
         setAuthor(b.author);
@@ -81,10 +85,18 @@ export const BookEditPage = () => {
     if (coverFile) formData.append('covers', coverFile);
 
     try {
-      await api.patch(`/api/books/${id}/`, formData, {
+      const res = await api.patch(`/api/books/${id}/`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      showToast(`مشخصات کتاب «${title}» با موفقیت بروزرسانی شد.`, 'success');
+      await refreshNotifications();
+      if (res.data.approval_status === 'pending' && !(user?.is_staff || user?.is_superuser)) {
+        showToast(
+          `تغییرات کتاب «${title}» ذخیره شد و برای بررسی و تأیید مجدد مدیریت ارسال گردید.`,
+          'info'
+        );
+      } else {
+        showToast(`مشخصات کتاب «${title}» با موفقیت بروزرسانی شد.`, 'success');
+      }
       navigate(`/books/${id}`);
     } catch (err) {
       const errMsg = extractApiError(err, 'خطا در بروزرسانی اطلاعات کتاب.');
@@ -180,9 +192,45 @@ export const BookEditPage = () => {
         <h1 style={{ fontSize: '26px', fontWeight: 800, marginBottom: '8px' }}>
           ویرایش مشخصات کتاب
         </h1>
-        <p style={{ color: 'var(--text-dim)', fontSize: '14px', marginBottom: '24px' }}>
+        <p style={{ color: 'var(--text-dim)', fontSize: '14px', marginBottom: '20px' }}>
           اطلاعات عنوان، نویسنده، قیمت، دسته‌بندی یا تصویر جلد این کتاب را بروزرسانی کنید.
         </p>
+
+        {approvalStatus === 'rejected' && (
+          <div className="alert alert-danger" style={{ marginBottom: '18px' }}>
+            <AlertCircle size={18} style={{ flexShrink: 0 }} />
+            <div>
+              <strong>این کتاب توسط مدیریت رد شده است.</strong>
+              {rejectionReason && <div>علت: {rejectionReason}</div>}
+              <div style={{ fontSize: '12.5px', marginTop: '4px' }}>
+                با ذخیره تغییرات، کتاب شما مجدداً در صف بررسی و تأیید مدیریت قرار خواهد گرفت.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!(user?.is_staff || user?.is_superuser) && approvalStatus !== 'rejected' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '10px 14px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--accent-soft)',
+              border: '1px solid rgba(232, 168, 56, 0.35)',
+              color: 'var(--accent2)',
+              fontSize: '13px',
+              fontWeight: 600,
+              marginBottom: '20px'
+            }}
+          >
+            <Clock size={16} style={{ flexShrink: 0 }} />
+            <span>
+              توجه: پس از ویرایش اطلاعات کتاب، تغییرات شما جهت تأیید مجدد برای مدیر یا کارمند کتابخانه ارسال می‌شود.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="alert alert-danger">

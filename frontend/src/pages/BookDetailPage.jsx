@@ -19,7 +19,9 @@ import {
   BellPlus,
   BellOff,
   Sparkles,
-  Plus
+  Plus,
+  ShieldCheck,
+  XCircle
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -34,6 +36,8 @@ export const BookDetailPage = () => {
   const { showToast, refreshNotifications } = useNotifications();
   const dialogRef = useRef(null);
   const dialogTitleId = useId();
+  const rejectDialogRef = useRef(null);
+  const rejectDialogTitleId = useId();
 
   const [book, setBook] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -48,6 +52,8 @@ export const BookDetailPage = () => {
   const [togglingWishlist, setTogglingWishlist] = useState(false);
   const [addingCopy, setAddingCopy] = useState(false);
   const [deletingCopyId, setDeletingCopyId] = useState(null);
+  const [reviewingBook, setReviewingBook] = useState(false);
+  const [rejectReasonInput, setRejectReasonInput] = useState('');
   const [message, setMessage] = useState(null);
 
   const fetchBook = async (shouldScrollTop = false) => {
@@ -77,13 +83,14 @@ export const BookDetailPage = () => {
 
   // Fallback for browsers without native <dialog closedby="any"> support
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
+    const dialogs = [dialogRef.current, rejectDialogRef.current].filter(Boolean);
+    if (dialogs.length === 0) return;
 
     if (!('closedBy' in HTMLDialogElement.prototype)) {
       const handleDialogClick = (event) => {
-        if (event.target !== dialog) return;
-        const rect = dialog.getBoundingClientRect();
+        const targetDialog = event.currentTarget;
+        if (event.target !== targetDialog) return;
+        const rect = targetDialog.getBoundingClientRect();
         const isDialogContent =
           rect.top <= event.clientY &&
           event.clientY <= rect.top + rect.height &&
@@ -91,11 +98,11 @@ export const BookDetailPage = () => {
           event.clientX <= rect.left + rect.width;
 
         if (isDialogContent) return;
-        dialog.close();
+        targetDialog.close();
       };
 
-      dialog.addEventListener('click', handleDialogClick);
-      return () => dialog.removeEventListener('click', handleDialogClick);
+      dialogs.forEach((d) => d.addEventListener('click', handleDialogClick));
+      return () => dialogs.forEach((d) => d.removeEventListener('click', handleDialogClick));
     }
   }, [book]);
 
@@ -251,6 +258,51 @@ export const BookDetailPage = () => {
     }
   };
 
+  const handleApproveBook = async () => {
+    if (reviewingBook) return;
+    setReviewingBook(true);
+    setMessage(null);
+    try {
+      const res = await api.post(`/api/books/${id}/review/`, { action: 'approve' });
+      setBook(res.data.book);
+      setMessage({ type: 'success', text: res.data.message });
+      showToast(res.data.message, 'success');
+      await refreshNotifications();
+    } catch (err) {
+      const errMsg = extractApiError(err, 'خطا در تأیید کتاب.');
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setReviewingBook(false);
+    }
+  };
+
+  const handleRejectBookSubmit = async (e) => {
+    e.preventDefault();
+    if (reviewingBook) return;
+    setReviewingBook(true);
+    setMessage(null);
+    try {
+      const res = await api.post(`/api/books/${id}/review/`, {
+        action: 'reject',
+        rejection_reason: rejectReasonInput.trim(),
+      });
+      setBook(res.data.book);
+      if (rejectDialogRef.current) rejectDialogRef.current.close();
+      setRejectReasonInput('');
+      setMessage({ type: 'info', text: res.data.message });
+      showToast(res.data.message, 'info');
+      await refreshNotifications();
+    } catch (err) {
+      if (rejectDialogRef.current) rejectDialogRef.current.close();
+      const errMsg = extractApiError(err, 'خطا در ثبت رد درخواست کتاب.');
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setReviewingBook(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="container">
@@ -282,6 +334,9 @@ export const BookDetailPage = () => {
   }
 
   const isOwner = user && (user.id === book.user || user.is_staff || user.is_superuser);
+  const isStaffOrAdmin = Boolean(user && (user.is_staff || user.is_superuser));
+  const approvalStatus = book.approval_status || 'approved';
+  const isApproved = approvalStatus === 'approved';
   const commentsList = book.comments || [];
   const relatedBooks = book.related_books || [];
 
@@ -306,6 +361,111 @@ export const BookDetailPage = () => {
         <div className={`alert alert-${message.type}`}>
           {message.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
           <span>{message.text}</span>
+        </div>
+      )}
+
+      {/* Approval Status & Staff Review Banner */}
+      {(!isApproved || isStaffOrAdmin) && (
+        <div
+          className="card"
+          style={{
+            padding: '18px 22px',
+            marginBottom: '22px',
+            borderColor:
+              approvalStatus === 'pending'
+                ? 'rgba(232, 168, 56, 0.55)'
+                : approvalStatus === 'rejected'
+                  ? 'rgba(220, 38, 38, 0.45)'
+                  : 'rgba(22, 163, 74, 0.35)',
+            background:
+              approvalStatus === 'pending'
+                ? 'var(--accent-soft)'
+                : approvalStatus === 'rejected'
+                  ? 'var(--danger-bg)'
+                  : 'var(--surface)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '14px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', flex: 1 }}>
+            {approvalStatus === 'pending' ? (
+              <Clock size={22} color="var(--accent2)" style={{ flexShrink: 0, marginTop: '2px' }} />
+            ) : approvalStatus === 'rejected' ? (
+              <XCircle size={22} color="var(--danger)" style={{ flexShrink: 0, marginTop: '2px' }} />
+            ) : (
+              <ShieldCheck size={22} color="var(--success)" style={{ flexShrink: 0, marginTop: '2px' }} />
+            )}
+
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '15px', marginBottom: '4px' }}>
+                {approvalStatus === 'pending'
+                  ? 'وضعیت کتاب: در انتظار بررسی و تأیید مدیریت (Pending)'
+                  : approvalStatus === 'rejected'
+                    ? 'وضعیت کتاب: رد شده توسط مدیریت کتابخانه'
+                    : 'وضعیت کتاب: تأیید شده و منتشر شده در کاتالوگ عمومی'}
+              </div>
+
+              {approvalStatus === 'pending' && (
+                <p style={{ fontSize: '13.5px', color: 'var(--text-dim)' }}>
+                  این کتاب تا زمان بررسی و تأیید توسط ادمین یا کارمند کتابخانه برای سایر کاربران در کاتالوگ عمومی نمایش داده نمی‌شود و امکان امانت‌گیری ندارد.
+                </p>
+              )}
+
+              {approvalStatus === 'rejected' && (
+                <div style={{ fontSize: '13.5px', color: 'var(--text-dim)' }}>
+                  <div>
+                    <strong>علت عدم تأیید:</strong> {book.rejection_reason || 'عدم انطباق با ضوابط کتابخانه'}
+                  </div>
+                  <div style={{ marginTop: '3px' }}>
+                    ثبت‌کننده کتاب می‌تواند با ویرایش مشخصات، مجدداً آن را برای بررسی مدیریت ارسال کند.
+                  </div>
+                </div>
+              )}
+
+              {book.reviewed_by_username && (
+                <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
+                  بررسی‌شده توسط: @{book.reviewed_by_username}
+                  {book.reviewed_at ? ` در تاریخ ${formatPersianDate(book.reviewed_at)}` : ''}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {isStaffOrAdmin && (
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              {approvalStatus !== 'approved' && (
+                <button
+                  type="button"
+                  onClick={handleApproveBook}
+                  disabled={reviewingBook}
+                  className="btn-success"
+                  style={{ padding: '9px 16px', fontSize: '13.5px' }}
+                >
+                  <CheckCircle size={16} />
+                  {reviewingBook ? 'در حال ثبت...' : 'تأیید و انتشار کتاب'}
+                </button>
+              )}
+
+              {approvalStatus !== 'rejected' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRejectReasonInput(book.rejection_reason || '');
+                    rejectDialogRef.current?.showModal();
+                  }}
+                  disabled={reviewingBook}
+                  className="btn-danger"
+                  style={{ padding: '9px 16px', fontSize: '13.5px' }}
+                >
+                  <XCircle size={16} />
+                  رد درخواست انتشار
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -341,7 +501,15 @@ export const BookDetailPage = () => {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
-                {book.is_available ? (
+                {approvalStatus === 'pending' ? (
+                  <span className="badge badge-category" style={{ fontSize: '12.5px', padding: '6px 14px' }}>
+                    <Clock size={14} /> در انتظار تأیید مدیریت (Pending)
+                  </span>
+                ) : approvalStatus === 'rejected' ? (
+                  <span className="badge badge-borrowed" style={{ fontSize: '12.5px', padding: '6px 14px' }}>
+                    <XCircle size={14} /> رد شده توسط مدیریت
+                  </span>
+                ) : book.is_available ? (
                   <span className="badge badge-available" style={{ fontSize: '12.5px', padding: '6px 14px' }}>
                     {book.total_copies_count > 1
                       ? `موجود در قفسه (${toPersianDigits(book.available_copies_count)} از ${toPersianDigits(book.total_copies_count)} جلد)`
@@ -449,7 +617,22 @@ export const BookDetailPage = () => {
               }}
             >
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-                {book.is_borrowed_by_user ? (
+                {!isApproved ? (
+                  <div
+                    className={`badge ${approvalStatus === 'rejected' ? 'badge-borrowed' : 'badge-category'}`}
+                    style={{ padding: '10px 18px', fontSize: '13.5px' }}
+                  >
+                    {approvalStatus === 'rejected' ? (
+                      <>
+                        <XCircle size={16} /> امکان امانت‌گیری وجود ندارد (رد شده توسط مدیریت)
+                      </>
+                    ) : (
+                      <>
+                        <Clock size={16} /> امکان امانت‌گیری پس از تأیید مدیریت فعال می‌شود
+                      </>
+                    )}
+                  </div>
+                ) : book.is_borrowed_by_user ? (
                   <div className="badge badge-available" style={{ padding: '10px 18px', fontSize: '13.5px' }}>
                     <CheckCircle size={16} /> این کتاب هم‌اکنون در امانت شماست
                   </div>
@@ -486,16 +669,18 @@ export const BookDetailPage = () => {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleWishlistToggle}
-                  disabled={togglingWishlist}
-                  className={book.is_wishlisted ? 'btn-danger' : 'btn-outline'}
-                  style={{ padding: '10px 16px' }}
-                >
-                  <Heart size={16} fill={book.is_wishlisted ? 'currentColor' : 'none'} />
-                  {book.is_wishlisted ? 'در لیست علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها'}
-                </button>
+                {isApproved && (
+                  <button
+                    type="button"
+                    onClick={handleWishlistToggle}
+                    disabled={togglingWishlist}
+                    className={book.is_wishlisted ? 'btn-danger' : 'btn-outline'}
+                    style={{ padding: '10px 16px' }}
+                  >
+                    <Heart size={16} fill={book.is_wishlisted ? 'currentColor' : 'none'} />
+                    {book.is_wishlisted ? 'در لیست علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها'}
+                  </button>
+                )}
               </div>
 
               {isOwner && (
@@ -630,6 +815,55 @@ export const BookDetailPage = () => {
         </form>
       </dialog>
 
+      {/* Native Accessible Modal Dialog for Rejecting a Book */}
+      <dialog
+        ref={rejectDialogRef}
+        className="confirm-dialog"
+        aria-labelledby={rejectDialogTitleId}
+        {...({ closedby: 'any' })}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--danger)' }}>
+          <XCircle size={26} />
+          <h2 id={rejectDialogTitleId} style={{ fontSize: '19px', fontWeight: 800 }}>
+            رد درخواست انتشار کتاب
+          </h2>
+        </div>
+
+        <form onSubmit={handleRejectBookSubmit}>
+          <div className="form-group" style={{ marginTop: '8px' }}>
+            <label className="form-label" htmlFor="reject-book-reason-input">
+              علت عدم تأیید (برای نمایش به کاربر ثبت‌کننده)
+            </label>
+            <textarea
+              id="reject-book-reason-input"
+              className="form-control"
+              rows={3}
+              placeholder="مثلاً: نقص در توضیحات کتاب، تصویر جلد نامناسب یا تکراری بودن عنوان..."
+              value={rejectReasonInput}
+              onChange={(e) => setRejectReasonInput(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '14px' }}>
+            <button
+              type="button"
+              onClick={() => rejectDialogRef.current?.close()}
+              className="btn-outline"
+            >
+              انصراف
+            </button>
+            <button
+              type="submit"
+              disabled={reviewingBook}
+              className="btn-danger"
+            >
+              <XCircle size={15} />
+              {reviewingBook ? 'در حال ثبت...' : 'ثبت عدم تأیید'}
+            </button>
+          </div>
+        </form>
+      </dialog>
+
       {/* Discussion & Reviews Section */}
       <div style={{ marginBottom: '60px' }}>
         <h3 style={{ fontSize: '21px', fontWeight: 800, marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -694,7 +928,11 @@ export const BookDetailPage = () => {
         )}
 
         {/* Add Comment Form */}
-        {isAuthenticated ? (
+        {!isApproved ? (
+          <div className="card" style={{ textAlign: 'center', padding: '24px', color: 'var(--muted)' }}>
+            امکان ثبت دیدگاه و امتیاز پس از تأیید و انتشار نهایی کتاب توسط مدیریت فعال خواهد شد.
+          </div>
+        ) : isAuthenticated ? (
           <div className="card" style={{ padding: '26px' }}>
             <h4 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '16px' }}>ثبت دیدگاه و امتیاز جدید</h4>
             <form onSubmit={handleCommentSubmit}>

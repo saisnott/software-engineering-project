@@ -36,11 +36,14 @@ class NotificationSerializer(serializers.ModelSerializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
-    books_count = serializers.IntegerField(source='books.count', read_only=True)
+    books_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
         fields = ['id', 'name', 'slug', 'books_count']
+
+    def get_books_count(self, obj):
+        return obj.books.filter(approval_status='approved').count()
 
 
 class CommentSerializer(serializers.ModelSerializer):
@@ -108,17 +111,28 @@ class BookListSerializer(serializers.ModelSerializer):
     total_copies_count = serializers.SerializerMethodField()
     available_copies_count = serializers.SerializerMethodField()
     copies = serializers.SerializerMethodField()
+    approval_status_label = serializers.SerializerMethodField()
+    reviewed_by_username = serializers.ReadOnlyField(source='reviewed_by.username')
 
     class Meta:
         model = Book
         fields = [
-            'id', 'book_code', 'title', 'author', 'price', 'covers', 'is_available',
+            'id', 'book_code', 'title', 'author', 'description', 'price', 'covers', 'is_available',
+            'approval_status', 'approval_status_label', 'rejection_reason',
+            'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at',
             'category', 'category_name', 'category_slug', 'comments_count',
             'average_rating', 'user', 'author_username', 'is_wishlisted',
             'current_borrower', 'total_borrows_count',
             'total_copies_count', 'available_copies_count', 'copies'
         ]
-        read_only_fields = ['id', 'book_code', 'user', 'is_available']
+        read_only_fields = [
+            'id', 'book_code', 'user', 'is_available',
+            'approval_status', 'approval_status_label', 'rejection_reason',
+            'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at'
+        ]
+
+    def get_approval_status_label(self, obj):
+        return obj.get_approval_status_display()
 
     def get_book_code(self, obj):
         return f"LIB-B{obj.id:04d}"
@@ -238,19 +252,30 @@ class BookDetailSerializer(serializers.ModelSerializer):
     available_copies_count = serializers.SerializerMethodField()
     copies = serializers.SerializerMethodField()
     copies_count = serializers.IntegerField(write_only=True, required=False, min_value=1, max_value=100, default=1)
+    approval_status_label = serializers.SerializerMethodField()
+    reviewed_by_username = serializers.ReadOnlyField(source='reviewed_by.username')
 
     class Meta:
         model = Book
         fields = [
             'id', 'book_code', 'qr_payload', 'title', 'author', 'description', 'price', 'covers',
-            'is_available', 'category', 'category_details', 'user',
+            'is_available', 'approval_status', 'approval_status_label', 'rejection_reason',
+            'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at',
+            'category', 'category_details', 'user',
             'author_username', 'comments', 'average_rating', 'ratings_count',
             'is_borrowed_by_user', 'is_wishlisted', 'is_reserved_by_user',
             'waitlist_count', 'related_books', 'current_borrower',
             'total_borrows_count', 'borrowing_history',
             'total_copies_count', 'available_copies_count', 'copies', 'copies_count'
         ]
-        read_only_fields = ['id', 'book_code', 'qr_payload', 'user', 'is_available']
+        read_only_fields = [
+            'id', 'book_code', 'qr_payload', 'user', 'is_available',
+            'approval_status', 'approval_status_label', 'rejection_reason',
+            'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at'
+        ]
+
+    def get_approval_status_label(self, obj):
+        return obj.get_approval_status_display()
 
     def get_book_code(self, obj):
         return f"LIB-B{obj.id:04d}"
@@ -316,13 +341,18 @@ class BookDetailSerializer(serializers.ModelSerializer):
         return BorrowingSerializer(records, many=True, context=self.context).data
 
     def get_related_books(self, obj):
-        qs = Book.objects.select_related('category', 'user').exclude(id=obj.id)
+        qs = Book.objects.select_related('category', 'user').filter(approval_status='approved').exclude(id=obj.id)
         if obj.category_id:
             same_cat = list(qs.filter(category_id=obj.category_id).order_by('-id')[:4])
             if len(same_cat) < 4:
                 needed = 4 - len(same_cat)
                 existing_ids = [b.id for b in same_cat] + [obj.id]
-                others = list(Book.objects.select_related('category', 'user').exclude(id__in=existing_ids).order_by('-id')[:needed])
+                others = list(
+                    Book.objects.select_related('category', 'user')
+                    .filter(approval_status='approved')
+                    .exclude(id__in=existing_ids)
+                    .order_by('-id')[:needed]
+                )
                 same_cat.extend(others)
             related = same_cat
         else:

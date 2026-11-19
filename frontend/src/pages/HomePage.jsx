@@ -58,11 +58,11 @@ export const HomePage = () => {
 
   const displayedBooks =
     activeTab === 'available'
-      ? allBooks.filter((b) => b.is_available).slice(0, 8)
+      ? allBooks.filter((b) => b.is_available && (!b.approval_status || b.approval_status === 'approved')).slice(0, 8)
       : allBooks.slice(0, 8);
 
-  const heroStackBooks = allBooks.slice(0, 3);
-  const availableCount = allBooks.filter((b) => b.is_available).length;
+  const heroStackBooks = allBooks.filter((b) => !b.approval_status || b.approval_status === 'approved').slice(0, 3);
+  const availableCount = allBooks.filter((b) => b.is_available && (!b.approval_status || b.approval_status === 'approved')).length;
 
   return (
     <div>

@@ -82,6 +82,7 @@ export const Navbar = () => {
       case 'reminder':
         return <AlertCircle size={16} color="var(--danger)" />;
       case 'role':
+      case 'approval':
         return <ShieldCheck size={16} color="var(--accent2)" />;
       default:
         return <BookOpen size={16} color="var(--accent2)" />;

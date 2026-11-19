@@ -29,6 +29,12 @@ class Category(models.Model):
 
 # ۲. کلاس Book را به این شکل تغییر بده
 class Book(models.Model):
+    APPROVAL_STATUS_CHOICES = [
+        ('pending', 'در انتظار تأیید'),
+        ('approved', 'تأیید شده'),
+        ('rejected', 'رد شده'),
+    ]
+
     # رابطه را به تنظیمات جنگو متصل می‌کنیم تا خودش مدل کاربر درست را پیدا کند
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     title = models.CharField(max_length=200)
@@ -37,6 +43,23 @@ class Book(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2)
     covers = models.ImageField(upload_to='covers/', blank=True)
     is_available = models.BooleanField(default=True)
+    approval_status = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default='approved',
+        verbose_name="وضعیت تأیید"
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_books',
+        verbose_name="بررسی‌شده توسط"
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True, verbose_name="تاریخ بررسی")
+    rejection_reason = models.TextField(blank=True, default='', verbose_name="دلیل رد شدن")
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     category = models.ForeignKey(
         Category,
@@ -158,6 +181,7 @@ class Notification(models.Model):
         ('comment', 'دیدگاه جدید'),
         ('role', 'تغییر دسترسی'),
         ('reminder', 'یادآوری موعد'),
+        ('approval', 'بررسی و تأیید کتاب'),
         ('info', 'اطلاعیه'),
     ]
 

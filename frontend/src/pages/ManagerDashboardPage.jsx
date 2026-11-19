@@ -23,7 +23,9 @@ import {
   Megaphone,
   Send,
   Zap,
-  BellRing
+  BellRing,
+  Clock,
+  XCircle
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -36,6 +38,8 @@ export const ManagerDashboardPage = () => {
   const isSuperuser = Boolean(currentUser?.is_superuser);
   const historyDialogRef = useRef(null);
   const historyDialogTitleId = useId();
+  const rejectDialogRef = useRef(null);
+  const rejectDialogTitleId = useId();
 
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -45,6 +49,10 @@ export const ManagerDashboardPage = () => {
   const [returningLoanId, setReturningLoanId] = useState(null);
   const [loanFilter, setLoanFilter] = useState('all'); // 'all' | 'active' | 'returned' | 'late'
   const [loanSearch, setLoanSearch] = useState('');
+  const [warehouseApprovalFilter, setWarehouseApprovalFilter] = useState('all'); // 'all' | 'approved' | 'pending' | 'rejected'
+  const [reviewingBookId, setReviewingBookId] = useState(null);
+  const [rejectTargetBook, setRejectTargetBook] = useState(null);
+  const [rejectReasonInput, setRejectReasonInput] = useState('');
   const [message, setMessage] = useState(null);
 
   // Item #11: Quick In-Person Borrow
@@ -123,13 +131,14 @@ export const ManagerDashboardPage = () => {
 
   // Fallback for browsers without native <dialog closedby="any"> support
   useEffect(() => {
-    const dialog = historyDialogRef.current;
-    if (!dialog) return;
+    const dialogs = [historyDialogRef.current, rejectDialogRef.current].filter(Boolean);
+    if (dialogs.length === 0) return;
 
     if (!('closedBy' in HTMLDialogElement.prototype)) {
       const handleDialogClick = (event) => {
-        if (event.target !== dialog) return;
-        const rect = dialog.getBoundingClientRect();
+        const targetDialog = event.currentTarget;
+        if (event.target !== targetDialog) return;
+        const rect = targetDialog.getBoundingClientRect();
         const isDialogContent =
           rect.top <= event.clientY &&
           event.clientY <= rect.top + rect.height &&
@@ -137,11 +146,11 @@ export const ManagerDashboardPage = () => {
           event.clientX <= rect.left + rect.width;
 
         if (isDialogContent) return;
-        dialog.close();
+        targetDialog.close();
       };
 
-      dialog.addEventListener('click', handleDialogClick);
-      return () => dialog.removeEventListener('click', handleDialogClick);
+      dialogs.forEach((d) => d.addEventListener('click', handleDialogClick));
+      return () => dialogs.forEach((d) => d.removeEventListener('click', handleDialogClick));
     }
   }, [loading]);
 
@@ -338,6 +347,58 @@ export const ManagerDashboardPage = () => {
     }
   };
 
+  const handleApproveBook = async (bookId) => {
+    if (reviewingBookId) return;
+    setReviewingBookId(bookId);
+    setMessage(null);
+    try {
+      const res = await api.post(`/api/books/${bookId}/review/`, { action: 'approve' });
+      setMessage({ type: 'success', text: res.data.message });
+      showToast(res.data.message, 'success');
+      await fetchStats();
+      await refreshNotifications();
+    } catch (err) {
+      const errMsg = err.response?.data?.error || 'خطا در تأیید و انتشار کتاب.';
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setReviewingBookId(null);
+    }
+  };
+
+  const openRejectBookModal = (book) => {
+    setRejectTargetBook(book);
+    setRejectReasonInput(book.rejection_reason || '');
+    rejectDialogRef.current?.showModal();
+  };
+
+  const handleRejectBookSubmit = async (e) => {
+    e.preventDefault();
+    if (!rejectTargetBook || reviewingBookId) return;
+    setReviewingBookId(rejectTargetBook.id);
+    setMessage(null);
+    try {
+      const res = await api.post(`/api/books/${rejectTargetBook.id}/review/`, {
+        action: 'reject',
+        rejection_reason: rejectReasonInput.trim(),
+      });
+      if (rejectDialogRef.current) rejectDialogRef.current.close();
+      setRejectTargetBook(null);
+      setRejectReasonInput('');
+      setMessage({ type: 'info', text: res.data.message });
+      showToast(res.data.message, 'info');
+      await fetchStats();
+      await refreshNotifications();
+    } catch (err) {
+      if (rejectDialogRef.current) rejectDialogRef.current.close();
+      const errMsg = err.response?.data?.error || 'خطا در رد کردن درخواست کتاب.';
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setReviewingBookId(null);
+    }
+  };
+
   // Superuser Actions
   const handleCreateUser = async (e) => {
     e.preventDefault();
@@ -453,6 +514,8 @@ export const ManagerDashboardPage = () => {
     borrowed_count = 0,
     available_count = 0,
     categories_count = 0,
+    pending_books_count = 0,
+    pending_books = [],
     recent_books = [],
     active_borrowings = [],
     all_borrowings = [],
@@ -461,6 +524,12 @@ export const ManagerDashboardPage = () => {
     books_directory = [],
     recent_broadcasts = []
   } = stats || {};
+
+  const filteredWarehouseBooks = recent_books.filter((b) => {
+    const st = b.approval_status || 'approved';
+    if (warehouseApprovalFilter === 'all') return true;
+    return st === warehouseApprovalFilter;
+  });
 
   const availableBooksDirectory = books_directory.filter((b) => b.is_available);
   const overdueMembersCount = members_directory.filter((m) => m.has_overdue).length;
@@ -680,8 +749,57 @@ export const ManagerDashboardPage = () => {
         )}
       </dialog>
 
+      {/* Reject Book Reason Modal Dialog */}
+      <dialog
+        ref={rejectDialogRef}
+        className="confirm-dialog"
+        aria-labelledby={rejectDialogTitleId}
+        {...({ closedby: 'any' })}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--danger)' }}>
+          <XCircle size={26} />
+          <h2 id={rejectDialogTitleId} style={{ fontSize: '19px', fontWeight: 800 }}>
+            رد درخواست انتشار کتاب {rejectTargetBook ? `«${rejectTargetBook.title}»` : ''}
+          </h2>
+        </div>
+
+        <form onSubmit={handleRejectBookSubmit}>
+          <div className="form-group" style={{ marginTop: '8px' }}>
+            <label className="form-label" htmlFor="manager-reject-reason-input">
+              علت عدم تأیید (برای اطلاع کاربر ثبت‌کننده)
+            </label>
+            <textarea
+              id="manager-reject-reason-input"
+              className="form-control"
+              rows={3}
+              placeholder="مثلاً: توضیحات ناقص است یا مشخصات کتاب با ضوابط کتابخانه مطابقت ندارد..."
+              value={rejectReasonInput}
+              onChange={(e) => setRejectReasonInput(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '14px' }}>
+            <button
+              type="button"
+              onClick={() => rejectDialogRef.current?.close()}
+              className="btn-outline"
+            >
+              انصراف
+            </button>
+            <button
+              type="submit"
+              disabled={Boolean(reviewingBookId)}
+              className="btn-danger"
+            >
+              <XCircle size={15} />
+              {reviewingBookId ? 'در حال ثبت...' : 'ثبت عدم تأیید'}
+            </button>
+          </div>
+        </form>
+      </dialog>
+
       {/* 1. Metric Cards Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '18px', marginBottom: '36px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '18px', marginBottom: '36px' }}>
         <div className="card" style={{ padding: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: '10px' }}>
             <span style={{ fontSize: '13.5px', fontWeight: 600 }}>کل جلدهای ثبت‌شده</span>
@@ -735,6 +853,177 @@ export const ManagerDashboardPage = () => {
             ژانرها و موضوعات فعال
           </div>
         </div>
+
+        <div
+          className="card"
+          style={{
+            padding: '24px',
+            borderColor: pending_books_count > 0 ? 'rgba(232, 168, 56, 0.55)' : undefined
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: '10px' }}>
+            <span style={{ fontSize: '13.5px', fontWeight: 600 }}>در انتظار تأیید</span>
+            <Clock size={20} color="var(--accent2)" />
+          </div>
+          <div style={{ fontSize: '34px', fontWeight: 800, color: 'var(--accent2)' }}>
+            {toPersianDigits(pending_books_count)}
+          </div>
+          <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
+            کتاب‌های جدید ثبت‌شده توسط اعضا
+          </div>
+        </div>
+      </div>
+
+      {/* 1.2. Pending Books Review & Approval Queue */}
+      <div
+        className="card"
+        style={{
+          padding: '26px',
+          marginBottom: '44px',
+          border: '1px solid rgba(232, 168, 56, 0.45)'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+          <div>
+            <h2 style={{ fontSize: '20px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Clock size={22} color="var(--accent2)" />
+              صف بررسی و تأیید کتاب‌های جدید ({toPersianDigits(pending_books.length)})
+            </h2>
+            <p style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px' }}>
+              کتاب‌های ثبت‌شده توسط کاربران که پیش از نمایش در کاتالوگ عمومی نیازمند بررسی و تأیید ادمین یا کارمند هستند
+            </p>
+          </div>
+          <span className="badge badge-category" style={{ fontSize: '12px', padding: '5px 12px' }}>
+            {pending_books.length > 0
+              ? `${toPersianDigits(pending_books.length)} مورد در انتظار بررسی`
+              : 'صف بررسی خالی است'}
+          </span>
+        </div>
+
+        {pending_books.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '28px 16px', color: 'var(--muted)', fontSize: '14px' }}>
+            در حال حاضر هیچ کتاب جدیدی در انتظار بررسی و تأیید وجود ندارد.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: '16px' }}>
+            {pending_books.map((pb) => (
+              <div
+                key={pb.id}
+                style={{
+                  background: 'var(--surface2)',
+                  border: '1px solid var(--border-strong)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '18px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '14px'
+                }}
+              >
+                <div style={{ display: 'flex', gap: '14px' }}>
+                  <div
+                    style={{
+                      width: '74px',
+                      height: '104px',
+                      borderRadius: '8px',
+                      overflow: 'hidden',
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      flexShrink: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {pb.covers ? (
+                      <img src={pb.covers} alt={pb.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <BookOpen size={24} style={{ opacity: 0.35 }} />
+                    )}
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '4px' }}>
+                      <span className="badge badge-category" style={{ fontSize: '11px' }}>
+                        <Clock size={11} /> در انتظار تأیید (Pending)
+                      </span>
+                      <span className="price" style={{ fontSize: '14px' }}>
+                        {formatPrice(pb.price)}
+                      </span>
+                    </div>
+
+                    <Link
+                      to={`/books/${pb.id}`}
+                      style={{ fontWeight: 800, fontSize: '15.5px', color: 'var(--text)', display: 'block', marginBottom: '2px' }}
+                    >
+                      {pb.title}
+                    </Link>
+
+                    <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginBottom: '6px' }}>
+                      نویسنده: <strong>{pb.author}</strong>
+                    </div>
+
+                    <div style={{ fontSize: '12px', color: 'var(--muted)', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                      <span>ثبت‌کننده: <strong style={{ color: 'var(--accent2)' }}>@{pb.author_username || 'کاربر'}</strong></span>
+                      <span>دسته: <strong>{pb.category_name || 'بدون دسته'}</strong></span>
+                      <span>تعداد: <strong>{toPersianDigits(pb.total_copies_count || 1)} جلد</strong></span>
+                    </div>
+                  </div>
+                </div>
+
+                {pb.description && (
+                  <p
+                    style={{
+                      fontSize: '12.5px',
+                      color: 'var(--text-dim)',
+                      background: 'var(--surface)',
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    {pb.description}
+                  </p>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: 'auto', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleApproveBook(pb.id)}
+                    disabled={reviewingBookId === pb.id}
+                    className="btn-success"
+                    style={{ flex: 1, padding: '8px 12px', fontSize: '12.5px' }}
+                  >
+                    <CheckCircle size={14} />
+                    {reviewingBookId === pb.id ? 'در حال ثبت...' : 'تأیید و انتشار'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => openRejectBookModal(pb)}
+                    disabled={reviewingBookId === pb.id}
+                    className="btn-danger"
+                    style={{ flex: 1, padding: '8px 12px', fontSize: '12.5px' }}
+                  >
+                    <XCircle size={14} />
+                    رد درخواست
+                  </button>
+
+                  <Link
+                    to={`/books/${pb.id}`}
+                    className="btn-outline"
+                    style={{ padding: '8px 12px', fontSize: '12.5px' }}
+                  >
+                    مشاهده
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 1.5. Smart Operations Row: Item #11 (Quick In-Person Loan) & Item #10 (Broadcast / Targeted Notifications) */}
@@ -1731,9 +2020,42 @@ export const ManagerDashboardPage = () => {
 
       {/* 6. Recent Additions & Book Circulation Table */}
       <div>
-        <h2 style={{ fontSize: '21px', fontWeight: 800, marginBottom: '16px' }}>
-          مخزن کتاب‌ها و سابقه گردش هر کتاب
-        </h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+          <h2 style={{ fontSize: '21px', fontWeight: 800 }}>
+            مخزن کتاب‌ها و سابقه گردش هر کتاب ({toPersianDigits(filteredWarehouseBooks.length)})
+          </h2>
+
+          <div className="tabs-pill-group">
+            <button
+              type="button"
+              className={`tab-pill-btn ${warehouseApprovalFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setWarehouseApprovalFilter('all')}
+            >
+              همه ({toPersianDigits(recent_books.length)})
+            </button>
+            <button
+              type="button"
+              className={`tab-pill-btn ${warehouseApprovalFilter === 'approved' ? 'active' : ''}`}
+              onClick={() => setWarehouseApprovalFilter('approved')}
+            >
+              تأیید شده ({toPersianDigits(recent_books.filter((b) => (b.approval_status || 'approved') === 'approved').length)})
+            </button>
+            <button
+              type="button"
+              className={`tab-pill-btn ${warehouseApprovalFilter === 'pending' ? 'active' : ''}`}
+              onClick={() => setWarehouseApprovalFilter('pending')}
+            >
+              در انتظار تأیید ({toPersianDigits(recent_books.filter((b) => b.approval_status === 'pending').length)})
+            </button>
+            <button
+              type="button"
+              className={`tab-pill-btn ${warehouseApprovalFilter === 'rejected' ? 'active' : ''}`}
+              onClick={() => setWarehouseApprovalFilter('rejected')}
+            >
+              رد شده ({toPersianDigits(recent_books.filter((b) => b.approval_status === 'rejected').length)})
+            </button>
+          </div>
+        </div>
 
         <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
           <div className="table-wrapper" tabIndex={0} role="region" aria-label="مخزن کتاب‌ها">
@@ -1744,62 +2066,100 @@ export const ManagerDashboardPage = () => {
                   <th>نویسنده</th>
                   <th>دسته‌بندی</th>
                   <th>قیمت</th>
-                  <th>وضعیت و امانت‌گیرنده فعلی</th>
+                  <th>وضعیت تأیید و موجودی</th>
                   <th>تعداد امانت</th>
                   <th>عملیات و تاریخچه</th>
                 </tr>
               </thead>
               <tbody>
-                {recent_books.map((b) => (
-                  <tr key={b.id}>
-                    <td>
-                      <strong style={{ color: 'var(--text)' }}>{b.title}</strong>
-                    </td>
-                    <td>{b.author}</td>
-                    <td>
-                      <span className="badge badge-category">{b.category_name || '—'}</span>
-                    </td>
-                    <td>{formatPrice(b.price)}</td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        {b.is_available ? (
-                          <span className="badge badge-available">
-                            {`${toPersianDigits(b.available_copies_count ?? 1)} از ${toPersianDigits(b.total_copies_count ?? 1)} موجود در قفسه`}
-                          </span>
-                        ) : (
-                          <span className="badge badge-borrowed">
-                            {`${toPersianDigits(0)} از ${toPersianDigits(b.total_copies_count ?? 1)} موجود`}
+                {filteredWarehouseBooks.map((b) => {
+                  const st = b.approval_status || 'approved';
+                  return (
+                    <tr key={b.id}>
+                      <td>
+                        <strong style={{ color: 'var(--text)', display: 'block' }}>{b.title}</strong>
+                        {b.author_username && (
+                          <span style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
+                            ثبت‌کننده: @{b.author_username}
                           </span>
                         )}
-                        {b.current_borrower && (
-                          <span style={{ fontSize: '12px', color: 'var(--accent2)', fontWeight: 700 }}>
-                            (امانت‌گیرنده: {b.current_borrower})
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <span className="badge badge-category">
-                        {toPersianDigits(b.total_borrows_count || 0)} نوبت
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          onClick={() => openBookHistoryModal(b.id, b.title)}
-                          className="btn-outline"
-                          style={{ padding: '5px 10px', fontSize: '12px' }}
-                        >
-                          <History size={13} /> سابقه امانت کتاب
-                        </button>
-                        <Link to={`/books/${b.id}`} className="btn-outline" style={{ padding: '5px 10px', fontSize: '12px' }}>
-                          مشاهده کتاب
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>{b.author}</td>
+                      <td>
+                        <span className="badge badge-category">{b.category_name || '—'}</span>
+                      </td>
+                      <td>{formatPrice(b.price)}</td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          {st === 'pending' ? (
+                            <span className="badge badge-category">
+                              <Clock size={12} /> در انتظار تأیید (Pending)
+                            </span>
+                          ) : st === 'rejected' ? (
+                            <span className="badge badge-borrowed">
+                              <XCircle size={12} /> رد شده
+                            </span>
+                          ) : b.is_available ? (
+                            <span className="badge badge-available">
+                              {`${toPersianDigits(b.available_copies_count ?? 1)} از ${toPersianDigits(b.total_copies_count ?? 1)} موجود در قفسه`}
+                            </span>
+                          ) : (
+                            <span className="badge badge-borrowed">
+                              {`${toPersianDigits(0)} از ${toPersianDigits(b.total_copies_count ?? 1)} موجود`}
+                            </span>
+                          )}
+                          {b.current_borrower && (
+                            <span style={{ fontSize: '12px', color: 'var(--accent2)', fontWeight: 700 }}>
+                              (امانت‌گیرنده: {b.current_borrower})
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <span className="badge badge-category">
+                          {toPersianDigits(b.total_borrows_count || 0)} نوبت
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {st !== 'approved' && (
+                            <button
+                              type="button"
+                              onClick={() => handleApproveBook(b.id)}
+                              disabled={reviewingBookId === b.id}
+                              className="btn-success"
+                              style={{ padding: '5px 10px', fontSize: '12px' }}
+                            >
+                              <CheckCircle size={13} /> تأیید
+                            </button>
+                          )}
+                          {st !== 'rejected' && (
+                            <button
+                              type="button"
+                              onClick={() => openRejectBookModal(b)}
+                              disabled={reviewingBookId === b.id}
+                              className="btn-danger"
+                              style={{ padding: '5px 10px', fontSize: '12px' }}
+                            >
+                              <XCircle size={13} /> رد
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openBookHistoryModal(b.id, b.title)}
+                            className="btn-outline"
+                            style={{ padding: '5px 10px', fontSize: '12px' }}
+                          >
+                            <History size={13} /> سابقه امانت کتاب
+                          </button>
+                          <Link to={`/books/${b.id}`} className="btn-outline" style={{ padding: '5px 10px', fontSize: '12px' }}>
+                            مشاهده کتاب
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

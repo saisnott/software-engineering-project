@@ -482,11 +482,22 @@ class BookstoreAPITests(TestCase):
         }, format='json')
         self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
         book_id = create_res.data['id']
+        self.assertEqual(create_res.data['approval_status'], 'pending')
         self.assertEqual(create_res.data['total_copies_count'], 2)
         self.assertEqual(create_res.data['available_copies_count'], 2)
         copy_ids = [c['id'] for c in create_res.data['copies']]
         self.assertEqual(len(copy_ids), 2)
         self.assertNotEqual(copy_ids[0], copy_ids[1])
+
+        # Cannot borrow while still pending approval
+        pending_borrow = self.client.post(f'/api/books/{book_id}/borrow/')
+        self.assertEqual(pending_borrow.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Staff approves the book
+        self.client.force_authenticate(user=self.staff_user)
+        approve_res = self.client.post(f'/api/books/{book_id}/review/', {'action': 'approve'}, format='json')
+        self.assertEqual(approve_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(approve_res.data['book']['approval_status'], 'approved')
 
         # User 1 borrows copy #1 -> book still has 1 available copy, so is_available remains True
         self.client.force_authenticate(user=self.user)
@@ -612,6 +623,211 @@ class BookstoreAPITests(TestCase):
         self.book.refresh_from_db()
         self.assertIsNone(self.book.user)
         self.assertTrue(Borrowing.objects.filter(id=waiter_loan.data['borrowing']['id'], return_date__isnull=True).exists())
+
+    def test_book_approval_and_rejection_workflow(self):
+        # 1. Regular user creates a book -> goes to 'pending'
+        self.client.force_authenticate(user=self.user)
+        create_res = self.client.post('/api/books/', {
+            'title': 'بوف کور',
+            'author': 'صادق هدایت',
+            'description': 'داستان سوررئال ایرانی',
+            'price': '18.00',
+            'category': self.category.id,
+        }, format='json')
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
+        book_id = create_res.data['id']
+        self.assertEqual(create_res.data['approval_status'], 'pending')
+
+        # Staff received an approval notification
+        self.assertTrue(
+            Notification.objects.filter(user=self.staff_user, notif_type='approval').exists()
+        )
+
+        # Creator sees their own pending book in GET /api/books/ with approval_status='pending'
+        creator_list = self.client.get('/api/books/')
+        creator_book_ids = [b['id'] for b in creator_list.data]
+        self.assertIn(book_id, creator_book_ids)
+
+        # Other regular user and anonymous guest do NOT see the pending book in GET /api/books/ or detail
+        self.client.force_authenticate(user=self.other_user)
+        other_list = self.client.get('/api/books/')
+        self.assertNotIn(book_id, [b['id'] for b in other_list.data])
+        other_detail = self.client.get(f'/api/books/{book_id}/')
+        self.assertEqual(other_detail.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Regular user cannot approve their own book
+        self.client.force_authenticate(user=self.user)
+        forbid_review = self.client.post(f'/api/books/{book_id}/review/', {'action': 'approve'}, format='json')
+        self.assertEqual(forbid_review.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Cannot borrow, wishlist, reserve, or comment on pending book
+        self.assertEqual(self.client.post(f'/api/books/{book_id}/borrow/').status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.client.post(f'/api/books/{book_id}/wishlist/').status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.client.post(f'/api/books/{book_id}/reserve/').status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            self.client.post(f'/api/books/{book_id}/comments/', {'text': 'تست', 'rating': 5}, format='json').status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        # 2. Staff sees pending book in manager stats and rejects it with a reason
+        self.client.force_authenticate(user=self.staff_user)
+        stats_res = self.client.get('/api/manager/stats/')
+        self.assertEqual(stats_res.data['pending_books_count'], 1)
+        self.assertEqual(stats_res.data['pending_books'][0]['id'], book_id)
+
+        reject_res = self.client.post(f'/api/books/{book_id}/review/', {
+            'action': 'reject',
+            'rejection_reason': 'توضیحات کتاب بسیار کوتاه است.'
+        }, format='json')
+        self.assertEqual(reject_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(reject_res.data['book']['approval_status'], 'rejected')
+        self.assertEqual(reject_res.data['book']['rejection_reason'], 'توضیحات کتاب بسیار کوتاه است.')
+
+        # 3. Submitter checks dashboard -> sees rejected status & reason, then edits book -> resets to 'pending'
+        self.client.force_authenticate(user=self.user)
+        dash_res = self.client.get('/api/dashboard/')
+        submitted_map = {b['id']: b for b in dash_res.data['submitted_books']}
+        self.assertEqual(submitted_map[book_id]['approval_status'], 'rejected')
+        self.assertEqual(submitted_map[book_id]['rejection_reason'], 'توضیحات کتاب بسیار کوتاه است.')
+
+        edit_res = self.client.patch(f'/api/books/{book_id}/', {
+            'description': 'توضیحات کامل و جامع درباره رمان بوف کور اثر صادق هدایت.'
+        }, format='json')
+        self.assertEqual(edit_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(edit_res.data['approval_status'], 'pending')
+        self.assertEqual(edit_res.data['rejection_reason'], '')
+
+        # 4. Staff approves the resubmitted book -> now visible and borrowable by everyone
+        self.client.force_authenticate(user=self.staff_user)
+        approve_res = self.client.post(f'/api/books/{book_id}/review/', {'action': 'approve'}, format='json')
+        self.assertEqual(approve_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(approve_res.data['book']['approval_status'], 'approved')
+
+        self.client.force_authenticate(user=self.other_user)
+        other_list_after = self.client.get('/api/books/')
+        self.assertIn(book_id, [b['id'] for b in other_list_after.data])
+        borrow_ok = self.client.post(f'/api/books/{book_id}/borrow/')
+        self.assertEqual(borrow_ok.status_code, status.HTTP_201_CREATED)
+
+        # 5. Staff creating a book directly is auto-approved
+        self.client.force_authenticate(user=self.staff_user)
+        staff_book_res = self.client.post('/api/books/', {
+            'title': 'کتاب مستقیم کارمند',
+            'author': 'نویسنده',
+            'description': 'توضیح',
+            'price': '30.00',
+        }, format='json')
+        self.assertEqual(staff_book_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(staff_book_res.data['approval_status'], 'approved')
+
+    def test_book_approval_edge_cases_and_security(self):
+        superuser = User.objects.create_superuser(
+            username='super_reviewer',
+            email='super@example.com',
+            password='password123'
+        )
+
+        # 1. Regular user cannot spoof approval_status='approved' on create or update
+        self.client.force_authenticate(user=self.user)
+        spoof_create = self.client.post('/api/books/', {
+            'title': 'کتاب جعلی',
+            'author': 'نویسنده',
+            'description': 'توضیح',
+            'price': '20.00',
+            'category': self.category.id,
+            'approval_status': 'approved',
+        }, format='json')
+        self.assertEqual(spoof_create.status_code, status.HTTP_201_CREATED)
+        pending_id = spoof_create.data['id']
+        self.assertEqual(spoof_create.data['approval_status'], 'pending')
+
+        spoof_patch = self.client.patch(f'/api/books/{pending_id}/', {
+            'approval_status': 'approved',
+            'title': 'کتاب جعلی ویرایش‌شده',
+        }, format='json')
+        self.assertEqual(spoof_patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(spoof_patch.data['approval_status'], 'pending')
+
+        # 2. Anonymous user cannot see pending book in list, detail, category count, or related_books
+        self.client.force_authenticate(user=None)
+        anon_list = self.client.get('/api/books/')
+        self.assertNotIn(pending_id, [b['id'] for b in anon_list.data])
+        self.assertEqual(self.client.get(f'/api/books/{pending_id}/').status_code, status.HTTP_404_NOT_FOUND)
+
+        cat_res = self.client.get('/api/categories/')
+        self.assertEqual(cat_res.data[0]['books_count'], 1)  # Only self.book is approved
+
+        self_detail = self.client.get(f'/api/books/{self.book.id}/')
+        related_ids = [b['id'] for b in self_detail.data['related_books']]
+        self.assertNotIn(pending_id, related_ids)
+
+        # 3. Unauthenticated review returns 401, invalid action returns 400
+        self.assertEqual(
+            self.client.post(f'/api/books/{pending_id}/review/', {'action': 'approve'}, format='json').status_code,
+            status.HTTP_401_UNAUTHORIZED
+        )
+        self.client.force_authenticate(user=self.staff_user)
+        self.assertEqual(
+            self.client.post(f'/api/books/{pending_id}/review/', {'action': 'invalid_op'}, format='json').status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        # 4. Staff quick borrow rejects pending book
+        quick_res = self.client.post('/api/manager/quick-borrow/', {
+            'user_identifier': self.other_user.username,
+            'book_identifier': str(pending_id),
+            'days': 7,
+        }, format='json')
+        self.assertEqual(quick_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 5. Superuser approves the book -> category books_count becomes 2
+        self.client.force_authenticate(user=superuser)
+        sup_approve = self.client.post(f'/api/books/{pending_id}/review/', {'action': 'approve'}, format='json')
+        self.assertEqual(sup_approve.status_code, status.HTTP_200_OK)
+        self.assertEqual(sup_approve.data['book']['approval_status'], 'approved')
+        self.assertEqual(sup_approve.data['book']['reviewed_by_username'], 'super_reviewer')
+        self.assertEqual(self.client.get('/api/categories/').data[0]['books_count'], 2)
+
+        # 6. Cannot reject an approved book while it is actively borrowed
+        self.client.force_authenticate(user=self.other_user)
+        borrow_res = self.client.post(f'/api/books/{pending_id}/borrow/')
+        self.assertEqual(borrow_res.status_code, status.HTTP_201_CREATED)
+
+        self.client.force_authenticate(user=self.staff_user)
+        reject_borrowed = self.client.post(f'/api/books/{pending_id}/review/', {
+            'action': 'reject',
+            'rejection_reason': 'تست رد در امانت'
+        }, format='json')
+        self.assertEqual(reject_borrowed.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Return the book, then regular user edits it -> resets to pending for re-review
+        borrowing_id = borrow_res.data['borrowing']['id']
+        self.client.post(f'/api/borrowings/{borrowing_id}/return/')
+
+        self.client.force_authenticate(user=self.user)
+        user_edit_approved = self.client.patch(f'/api/books/{pending_id}/', {
+            'title': 'عنوان ویرایش‌شده توسط کاربر'
+        }, format='json')
+        self.assertEqual(user_edit_approved.status_code, status.HTTP_200_OK)
+        self.assertEqual(user_edit_approved.data['approval_status'], 'pending')
+
+        # 7. Superuser creating a book is auto-approved and staff editing keeps it approved
+        self.client.force_authenticate(user=superuser)
+        sup_create = self.client.post('/api/books/', {
+            'title': 'کتاب مدیر ارشد',
+            'author': 'نویسنده',
+            'description': 'توضیح',
+            'price': '25.00',
+        }, format='json')
+        self.assertEqual(sup_create.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(sup_create.data['approval_status'], 'approved')
+
+        self.client.force_authenticate(user=self.staff_user)
+        staff_edit = self.client.patch(f"/api/books/{sup_create.data['id']}/", {
+            'title': 'کتاب مدیر ارشد ویرایش‌شده'
+        }, format='json')
+        self.assertEqual(staff_edit.status_code, status.HTTP_200_OK)
+        self.assertEqual(staff_edit.data['approval_status'], 'approved')
 
 
 
