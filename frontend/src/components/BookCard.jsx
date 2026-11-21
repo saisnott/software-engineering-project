@@ -79,6 +79,10 @@ export const BookCard = ({ book, onWishlistChange }) => {
                 ? `موجود در قفسه (${toPersianDigits(book.available_copies_count)} از ${toPersianDigits(book.total_copies_count)})`
                 : 'موجود در قفسه'}
             </span>
+          ) : book.total_copies_count === 0 && book.sold_copies_count > 0 ? (
+            <span className="badge badge-borrowed" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
+              ناموجود (فروخته شده)
+            </span>
           ) : (
             <span className="badge badge-borrowed" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
               {book.total_copies_count > 1

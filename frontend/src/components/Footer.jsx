@@ -19,7 +19,7 @@ export const Footer = () => {
               <span>کتاب‌سرا</span>
             </Link>
             <p style={{ color: 'var(--text-dim)', fontSize: '13.5px', lineHeight: '1.8', marginTop: '10px' }}>
-              پلتفرم مدرن مدیریت کتابخانه، امانت هوشمند کتاب و تبادل نظر میان علاقه‌مندان به مطالعه و کتاب‌خوانی.
+              پلتفرم مدرن مدیریت کتابخانه، امانت هوشمند و خرید کتاب و تبادل نظر میان علاقه‌مندان به مطالعه و کتاب‌خوانی.
             </p>
           </div>
 
@@ -32,8 +32,9 @@ export const Footer = () => {
             <ul className="footer-links">
               <li><Link to="/">صفحه اصلی</Link></li>
               <li><Link to="/books">کاتالوگ کتاب‌ها</Link></li>
-              <li><Link to="/books?status=available">کتاب‌های موجود برای امانت</Link></li>
+              <li><Link to="/books?status=available">کتاب‌های موجود در قفسه</Link></li>
               <li><Link to="/dashboard">داشبورد کاربری من</Link></li>
+              <li><Link to="/wallet">کیف‌پول من</Link></li>
             </ul>
           </div>
 

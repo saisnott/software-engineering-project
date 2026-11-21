@@ -1,8 +1,20 @@
+from decimal import Decimal
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
-from .models import Book, BookCopy, Category, Comment, Borrowing, Notification
+from .models import (
+    Book,
+    BookCopy,
+    BookOrder,
+    Borrowing,
+    Category,
+    Comment,
+    FinancialSettings,
+    Notification,
+    Wallet,
+    WalletTransaction,
+)
 
 User = get_user_model()
 
@@ -393,12 +405,13 @@ class BookstoreAPITests(TestCase):
         self.client.force_authenticate(user=self.staff_user)
         self.client.post(f'/api/borrowings/{borrowing_id}/return/')
 
-        # Verify User 1 has both 'comment' and 'waitlist' unread notifications
+        # Verify User 1 has 'wallet' (owner earning), 'comment', and 'waitlist' unread notifications
         self.client.force_authenticate(user=self.user)
         notif_res = self.client.get('/api/notifications/')
         self.assertEqual(notif_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(notif_res.data['unread_count'], 2)
+        self.assertEqual(notif_res.data['unread_count'], 3)
         types = {n['notif_type'] for n in notif_res.data['results']}
+        self.assertIn('wallet', types)
         self.assertIn('waitlist', types)
         self.assertIn('comment', types)
 
@@ -828,6 +841,241 @@ class BookstoreAPITests(TestCase):
         }, format='json')
         self.assertEqual(staff_edit.status_code, status.HTTP_200_OK)
         self.assertEqual(staff_edit.data['approval_status'], 'approved')
+
+    def test_wallet_initial_bonus_topup_and_profile_security(self):
+        self.client.force_authenticate(user=self.other_user)
+
+        # New user starts with $100.00 welcome bonus
+        wallet_res = self.client.get('/api/wallet/')
+        self.assertEqual(wallet_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(wallet_res.data['wallet']['balance'], '100.00')
+        self.assertEqual(wallet_res.data['wallet']['locked_balance'], '0.00')
+
+        # Reject invalid topup amounts
+        for bad_amount in (-10, 0, '0.50', '5000.00', 'abc', True, '10.123'):
+            bad_res = self.client.post('/api/wallet/topup/', {'amount': bad_amount}, format='json')
+            self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Valid topups succeed with sequential 4-digit reference codes
+        ok_res = self.client.post('/api/wallet/topup/', {'amount': '50.25'}, format='json')
+        self.assertEqual(ok_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ok_res.data['wallet']['balance'], '150.25')
+        self.assertEqual(ok_res.data['transaction']['reference_code'], 'TOP-0001')
+
+        ok_res2 = self.client.post('/api/wallet/topup/', {'amount': '10.00'}, format='json')
+        self.assertEqual(ok_res2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ok_res2.data['transaction']['reference_code'], 'TOP-0002')
+        self.assertEqual(ok_res2.data['wallet']['balance'], '160.25')
+
+        # User cannot spoof wallet balance or frozen flag via profile PATCH
+        spoof_res = self.client.patch('/api/auth/profile/', {
+            'wallet_balance': '99999.00',
+            'wallet_is_frozen': False,
+            'age': 31,
+        }, format='json')
+        self.assertEqual(spoof_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(spoof_res.data['wallet_balance'], '160.25')
+
+    def test_book_purchase_revenue_split_and_sold_copy(self):
+        # Owner cannot buy their own book
+        self.client.force_authenticate(user=self.user)
+        self_buy = self.client.post(f'/api/books/{self.book.id}/purchase/')
+        self.assertEqual(self_buy.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Regular buyer purchases self.book ($15.50) owned by self.user
+        # 80% ($12.40) -> self.user wallet, 20% ($3.10) -> platform commission
+        self.client.force_authenticate(user=self.other_user)
+        buy_res = self.client.post(f'/api/books/{self.book.id}/purchase/')
+        self.assertEqual(buy_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(buy_res.data['order']['total_price'], '15.50')
+        self.assertEqual(buy_res.data['order']['order_code'], 'ORD-0001')
+        self.assertEqual(buy_res.data['transaction']['reference_code'], 'PUR-0001')
+        self.assertEqual(buy_res.data['order']['owner_share'], '12.40')
+        self.assertEqual(buy_res.data['order']['platform_commission'], '3.10')
+        self.assertEqual(buy_res.data['wallet']['balance'], '84.50')
+
+        owner_wallet = Wallet.objects.get(user=self.user)
+        self.assertEqual(owner_wallet.balance, Decimal('112.40'))
+
+        # Book copy is now marked sold and book is unavailable
+        self.book.refresh_from_db()
+        self.assertFalse(self.book.is_available)
+        sold_copy = self.book.copies.first()
+        self.assertTrue(sold_copy.is_sold)
+        self.assertFalse(sold_copy.is_available)
+
+        # Sold copy cannot be deleted and is not miscounted as borrowed in manager stats
+        self.client.force_authenticate(user=self.staff_user)
+        del_sold = self.client.delete(f'/api/books/{self.book.id}/copies/{sold_copy.id}/')
+        self.assertEqual(del_sold.status_code, status.HTTP_400_BAD_REQUEST)
+
+        stats_res = self.client.get('/api/manager/stats/')
+        self.assertEqual(stats_res.data['borrowed_count'], 0)
+        self.assertEqual(stats_res.data['sold_copies_count'], 1)
+
+        # Orders endpoint reflects buyer and seller records
+        self.client.force_authenticate(user=self.other_user)
+        orders_buyer = self.client.get('/api/orders/')
+        self.assertEqual(len(orders_buyer.data['purchased']), 1)
+
+        self.client.force_authenticate(user=self.user)
+        orders_seller = self.client.get('/api/orders/')
+        self.assertEqual(len(orders_seller.data['sold']), 1)
+
+    def test_borrow_deposit_extend_and_ontime_return_wallet_flow(self):
+        # self.book price = $15.50 -> borrow_fee (10%) = $1.55, deposit (50%) = $7.75
+        # owner share of borrow_fee (80%) = $1.24, platform = $0.31
+        self.client.force_authenticate(user=self.other_user)
+        borrow_res = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(borrow_res.status_code, status.HTTP_201_CREATED)
+        borrowing_id = borrow_res.data['borrowing']['id']
+
+        buyer_wallet = Wallet.objects.get(user=self.other_user)
+        owner_wallet = Wallet.objects.get(user=self.user)
+        self.assertEqual(buyer_wallet.balance, Decimal('90.70'))
+        self.assertEqual(buyer_wallet.locked_balance, Decimal('7.75'))
+        self.assertEqual(owner_wallet.balance, Decimal('101.24'))
+
+        # Extend loan (+7 days) -> $2.00 fee (80% $1.60 to owner, $0.40 platform)
+        ext_res = self.client.post(f'/api/borrowings/{borrowing_id}/extend/')
+        self.assertEqual(ext_res.status_code, status.HTTP_200_OK)
+        buyer_wallet.refresh_from_db()
+        owner_wallet.refresh_from_db()
+        self.assertEqual(buyer_wallet.balance, Decimal('88.70'))
+        self.assertEqual(owner_wallet.balance, Decimal('102.84'))
+
+        # Return on time -> full $7.75 deposit released back to borrower
+        ret_res = self.client.post(f'/api/borrowings/{borrowing_id}/return/')
+        self.assertEqual(ret_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(ret_res.data['settlement']['deposit_released'], '7.75')
+        self.assertEqual(ret_res.data['settlement']['late_fee'], '0.00')
+
+        buyer_wallet.refresh_from_db()
+        self.assertEqual(buyer_wallet.balance, Decimal('96.45'))
+        self.assertEqual(buyer_wallet.locked_balance, Decimal('0.00'))
+
+    def test_overdue_late_fee_unpaid_fine_blocking_and_settlement(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        # Borrow $15.50 book (fee $1.55, deposit $7.75) -> remaining balance = $90.70
+        self.client.force_authenticate(user=self.other_user)
+        borrow_res = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(borrow_res.status_code, status.HTTP_201_CREATED)
+        borrowing_id = borrow_res.data['borrowing']['id']
+
+        # Lower borrower's available balance to $2.00 and make borrowing 12 days overdue ($12.00 fine)
+        Wallet.objects.filter(user=self.other_user).update(balance=Decimal('2.00'))
+        Borrowing.objects.filter(id=borrowing_id).update(
+            borrow_date=timezone.now() - timedelta(days=26),
+            due_date=timezone.now() - timedelta(days=12),
+        )
+
+        # Return late: $7.75 deducted from deposit, $2.00 from balance, $2.25 remains unpaid_fine
+        ret_res = self.client.post(f'/api/borrowings/{borrowing_id}/return/')
+        self.assertEqual(ret_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(ret_res.data['settlement']['late_fee'], '12.00')
+        self.assertEqual(ret_res.data['settlement']['deposit_released'], '0.00')
+        self.assertEqual(ret_res.data['settlement']['collected_fine'], '9.75')
+        self.assertEqual(ret_res.data['settlement']['unpaid_fine'], '2.25')
+
+        # Borrower with unpaid fine cannot borrow or buy until settled
+        self.client.post('/api/wallet/topup/', {'amount': '20.00'}, format='json')
+        blocked_borrow = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(blocked_borrow.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('unpaid_fines', blocked_borrow.data)
+
+        # Settle all unpaid fines -> unblocks borrowing
+        pay_res = self.client.post('/api/wallet/pay-fines/')
+        self.assertEqual(pay_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(pay_res.data['paid_amount'], '2.25')
+        self.assertEqual(pay_res.data['wallet']['balance'], '17.75')
+
+        ok_borrow = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(ok_borrow.status_code, status.HTTP_201_CREATED)
+
+    def test_insufficient_balance_and_admin_finance_controls(self):
+        superuser = User.objects.create_superuser(
+            username='finance_root',
+            email='fin@example.com',
+            password='password123'
+        )
+
+        # Set borrower balance to $1.00 -> borrowing/buying fails atomically without altering copy
+        Wallet.objects.filter(user=self.other_user).update(balance=Decimal('1.00'))
+        self.client.force_authenticate(user=self.other_user)
+        fail_borrow = self.client.post(f'/api/books/{self.book.id}/borrow/')
+        self.assertEqual(fail_borrow.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('shortfall', fail_borrow.data)
+        self.book.refresh_from_db()
+        self.assertTrue(self.book.is_available)
+        self.assertFalse(Borrowing.objects.filter(book=self.book).exists())
+
+        fail_buy = self.client.post(f'/api/books/{self.book.id}/purchase/')
+        self.assertEqual(fail_buy.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(BookOrder.objects.exists())
+
+        # Staff can view manager finance report, but cannot adjust wallets or change settings
+        self.client.force_authenticate(user=self.staff_user)
+        self.assertEqual(self.client.get('/api/manager/finance/').status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            self.client.post('/api/manager/wallet/adjust/', {
+                'user_identifier': self.other_user.username,
+                'action': 'credit',
+                'amount': '10.00',
+                'reason': 'تست'
+            }, format='json').status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+        self.assertEqual(
+            self.client.patch('/api/manager/finance/settings/', {'owner_share_percent': '75.00'}, format='json').status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        # Staff quick borrow with waive_fee=True works even with $1.00 balance
+        waived_loan = self.client.post('/api/manager/quick-borrow/', {
+            'user_identifier': self.other_user.username,
+            'book_identifier': str(self.book.id),
+            'days': 7,
+            'waive_fee': True,
+        }, format='json')
+        self.assertEqual(waived_loan.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Wallet.objects.get(user=self.other_user).balance, Decimal('1.00'))
+
+        # Superuser can credit, freeze wallet, and update financial settings
+        self.client.force_authenticate(user=superuser)
+        adj_credit = self.client.post('/api/manager/wallet/adjust/', {
+            'user_identifier': self.other_user.username,
+            'action': 'credit',
+            'amount': '49.00',
+            'reason': 'پاداش عضویت ویژه'
+        }, format='json')
+        self.assertEqual(adj_credit.status_code, status.HTTP_200_OK)
+        self.assertEqual(adj_credit.data['wallet']['balance'], '50.00')
+
+        adj_freeze = self.client.post('/api/manager/wallet/adjust/', {
+            'user_identifier': self.other_user.username,
+            'action': 'toggle_freeze',
+            'reason': 'بررسی امنیتی'
+        }, format='json')
+        self.assertEqual(adj_freeze.status_code, status.HTTP_200_OK)
+        self.assertTrue(adj_freeze.data['wallet']['is_frozen'])
+
+        # Frozen wallet cannot topup
+        self.client.force_authenticate(user=self.other_user)
+        frozen_topup = self.client.post('/api/wallet/topup/', {'amount': '10.00'}, format='json')
+        self.assertEqual(frozen_topup.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Superuser updates settings and book detail reflects new tariff
+        self.client.force_authenticate(user=superuser)
+        set_res = self.client.patch('/api/manager/finance/settings/', {
+            'owner_share_percent': '85.00',
+            'borrow_fee_percent': '20.00',
+        }, format='json')
+        self.assertEqual(set_res.status_code, status.HTTP_200_OK)
+        detail_res = self.client.get(f'/api/books/{self.book.id}/')
+        self.assertEqual(detail_res.data['financial_info']['owner_share_percent'], '85.00')
+        self.assertEqual(detail_res.data['financial_info']['borrow_fee'], '3.10')
 
 
 

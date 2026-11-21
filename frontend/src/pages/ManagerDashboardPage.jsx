@@ -30,10 +30,11 @@ import {
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
+import { ManagerFinanceSection } from '../components/ManagerFinanceSection';
 import { formatPrice, formatPersianDate, getRemainingDays, toPersianDigits } from '../utils/formatters';
 
 export const ManagerDashboardPage = () => {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, refreshProfile } = useAuth();
   const { showToast, refreshNotifications } = useNotifications();
   const isSuperuser = Boolean(currentUser?.is_superuser);
   const historyDialogRef = useRef(null);
@@ -59,6 +60,7 @@ export const ManagerDashboardPage = () => {
   const [quickUserIdentifier, setQuickUserIdentifier] = useState('');
   const [quickBookIdentifier, setQuickBookIdentifier] = useState('');
   const [quickLoanDays, setQuickLoanDays] = useState('14');
+  const [quickWaiveFee, setQuickWaiveFee] = useState(false);
   const [submittingQuickLoan, setSubmittingQuickLoan] = useState(false);
   const [quickLoanFeedback, setQuickLoanFeedback] = useState(null);
 
@@ -170,11 +172,13 @@ export const ManagerDashboardPage = () => {
         user_identifier: quickUserIdentifier,
         book_identifier: quickBookIdentifier,
         days: parsedDays,
+        waive_fee: quickWaiveFee,
       });
       setQuickLoanFeedback({ type: 'success', text: res.data.message });
       showToast(res.data.message, 'success');
       setQuickBookIdentifier('');
       await fetchStats();
+      await refreshProfile();
       await refreshNotifications();
       if (isSuperuser) await fetchUsers(userSearch);
     } catch (err) {
@@ -1062,7 +1066,7 @@ export const ManagerDashboardPage = () => {
                 <option value="">-- انتخاب عضو از لیست --</option>
                 {members_directory.map((m) => (
                   <option key={m.id} value={m.username} dir="ltr">
-                    {`${m.username} - ${m.active_loans_count} ${m.active_loans_count === 1 ? 'active borrowing' : 'active borrowings'}`}
+                    {`${m.username} — $${m.wallet_balance ?? '0.00'} (${m.active_loans_count} active)`}
                   </option>
                 ))}
               </select>
@@ -1112,6 +1116,17 @@ export const ManagerDashboardPage = () => {
                 dir="ltr"
                 required
               />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-dim)' }}>
+                <input
+                  type="checkbox"
+                  checked={quickWaiveFee}
+                  onChange={(e) => setQuickWaiveFee(e.target.checked)}
+                />
+                <span>معاف از کسر هزینه و ودیعه کیف‌پول (پرداخت نقدی/رایگان حضوری)</span>
+              </label>
             </div>
 
             <button
@@ -1341,6 +1356,17 @@ export const ManagerDashboardPage = () => {
           )}
         </div>
       </div>
+
+      {/* 1.8. Financial Management & Revenue Report Section */}
+      <ManagerFinanceSection
+        membersDirectory={members_directory}
+        isSuperuser={isSuperuser}
+        onFinanceChanged={() => {
+          fetchStats();
+          refreshProfile();
+          if (isSuperuser) fetchUsers(userSearch);
+        }}
+      />
 
       {/* 2. SUPERUSER-ONLY: User Management Section */}
       {isSuperuser && (

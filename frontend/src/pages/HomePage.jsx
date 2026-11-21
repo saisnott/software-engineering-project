@@ -12,7 +12,8 @@ import {
   ArrowLeft,
   CheckCircle2,
   PlusCircle,
-  BookMarked
+  BookMarked,
+  Wallet
 } from 'lucide-react';
 import api from '../api/client';
 import { BookCard, BookCardSkeleton } from '../components/BookCard';
@@ -56,13 +57,14 @@ export const HomePage = () => {
     }
   };
 
+  const approvedBooks = allBooks.filter((b) => !b.approval_status || b.approval_status === 'approved');
   const displayedBooks =
     activeTab === 'available'
-      ? allBooks.filter((b) => b.is_available && (!b.approval_status || b.approval_status === 'approved')).slice(0, 8)
-      : allBooks.slice(0, 8);
+      ? approvedBooks.filter((b) => b.is_available).slice(0, 8)
+      : approvedBooks.slice(0, 8);
 
-  const heroStackBooks = allBooks.filter((b) => !b.approval_status || b.approval_status === 'approved').slice(0, 3);
-  const availableCount = allBooks.filter((b) => b.is_available && (!b.approval_status || b.approval_status === 'approved')).length;
+  const heroStackBooks = approvedBooks.slice(0, 3);
+  const availableCount = approvedBooks.filter((b) => b.is_available).length;
 
   return (
     <div>
@@ -77,17 +79,17 @@ export const HomePage = () => {
             <div>
               <div className="hero-badge">
                 <Sparkles size={15} />
-                <span>نسل نوین کتابخانه دیجیتال و امانت آنلاین کتاب</span>
+                <span>نسل نوین کتابخانه دیجیتال، امانت و خرید آنلاین کتاب</span>
               </div>
 
               <h1 className="hero-title">
                 دنیایی از کتاب‌های ماندگار، آماده{' '}
-                <span className="hero-title-highlight">امانت و مطالعه شما</span>
+                <span className="hero-title-highlight">امانت، خرید و مطالعه شما</span>
               </h1>
 
               <p className="hero-subtitle">
                 در کتاب‌سرا به مجموعه‌ای غنی از کتاب‌های منتخب دسترسی داشته باشید، کتاب دلخواهتان را
-                به‌صورت آنی برای ۱۴ روز امانت بگیرید و دیدگاه‌های خود را با جامعه کتاب‌خوان‌ها به اشتراک بگذارید.
+                برای ۱۴ روز امانت بگیرید یا نسخه آن را به‌صورت دائمی خریداری کنید و دیدگاه‌های خود را با جامعه کتاب‌خوان‌ها به اشتراک بگذارید.
               </p>
 
               {/* Quick Search Bar */}
@@ -131,21 +133,21 @@ export const HomePage = () => {
               <div className="hero-stats-row">
                 <div className="hero-stat-item">
                   <span className="hero-stat-value">
-                    {loading ? '...' : `+${toPersianDigits(allBooks.length || 12)}`}
+                    {loading ? '...' : `+${toPersianDigits(approvedBooks.length || 12)}`}
                   </span>
-                  <span className="hero-stat-label">عنوان کتاب ثبت‌شده</span>
+                  <span className="hero-stat-label">عنوان کتاب تأییدشده</span>
                 </div>
 
                 <div className="hero-stat-item">
                   <span className="hero-stat-value">
                     {loading ? '...' : toPersianDigits(availableCount)}
                   </span>
-                  <span className="hero-stat-label">کتاب آماده امانت فوری</span>
+                  <span className="hero-stat-label">کتاب موجود در قفسه</span>
                 </div>
 
                 <div className="hero-stat-item">
                   <span className="hero-stat-value">{toPersianDigits(14)} روز</span>
-                  <span className="hero-stat-label">ضمانت امانت هوشمند</span>
+                  <span className="hero-stat-label">امانت + قابلیت تمدید</span>
                 </div>
               </div>
             </div>
@@ -155,7 +157,7 @@ export const HomePage = () => {
               <div className="hero-showcase-stage">
                 <div className="hero-floating-chip chip-top">
                   <CheckCircle2 size={18} color="var(--success)" />
-                  <span>امانت فوری ۱۴ روزه</span>
+                  <span>امانت ۱۴ روزه یا خرید دائمی</span>
                 </div>
 
                 <div className="hero-floating-chip chip-bottom">
@@ -279,7 +281,7 @@ export const HomePage = () => {
                   className={`tab-pill-btn ${activeTab === 'available' ? 'active' : ''}`}
                   onClick={() => setActiveTab('available')}
                 >
-                  موجود برای امانت ({toPersianDigits(availableCount)})
+                  موجود در قفسه ({toPersianDigits(availableCount)})
                 </button>
               </div>
 
@@ -312,7 +314,7 @@ export const HomePage = () => {
         <section className="section-block">
           <div className="section-header">
             <div>
-              <h2 className="section-title">چطور از کتاب‌سرا کتاب امانت بگیریم؟</h2>
+              <h2 className="section-title">چطور از کتاب‌سرا استفاده کنیم؟</h2>
               <p className="section-subtitle">فرآیند ساده و تمام‌دیجیتال در سه گام کوتاه</p>
             </div>
           </div>
@@ -322,23 +324,23 @@ export const HomePage = () => {
               <div className="step-number">{toPersianDigits(1)}</div>
               <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>انتخاب و بررسی کتاب</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px' }}>
-                در کاتالوگ جستجو کنید، خلاصه کتاب و دیدگاه‌های سایر خوانندگان را بخوانید و کتاب مورد نظر خود را بیابید.
+                در کاتالوگ جستجو کنید، وضعیت جلدهای موجود در قفسه را ببینید و خلاصه کتاب و دیدگاه‌های سایر خوانندگان را مطالعه کنید.
               </p>
             </div>
 
             <div className="step-card">
               <div className="step-number">{toPersianDigits(2)}</div>
-              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>امانت آنی ۱۴ روزه</h3>
+              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>امانت ۱۴ روزه یا خرید دائمی</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px' }}>
-                تنها با یک کلیک کتاب را برای ۱۴ روز به امانت بگیرید و وضعیت مهلت بازگشت آن را در داشبورد خود دنبال کنید.
+                کتاب را برای ۱۴ روز (با ودیعه قابل برگشت) به امانت بگیرید یا نسخه آن را به‌صورت دائمی از طریق کیف‌پول حساب کاربری خریداری کنید؛ در صورت تکمیل ظرفیت نیز می‌توانید وارد صف رزرو شوید.
               </p>
             </div>
 
             <div className="step-card">
               <div className="step-number">{toPersianDigits(3)}</div>
-              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>بازگشت آسان و ثبت تجربه</h3>
+              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>تمدید، تحویل و ثبت تجربه</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px' }}>
-                پس از مطالعه، کتاب را از طریق پنل کاربری به کتابخانه بازگردانید و نظر و پیشنهاد خود را برای دیگران ثبت کنید.
+                مهلت مطالعه را تا ۷ روز تمدید کنید، پس از تحویل کتاب ودیعه خود را به‌صورت خودکار در کیف‌پول پس بگیرید و نقد و امتیازتان را ثبت کنید.
               </p>
             </div>
           </div>
@@ -349,25 +351,25 @@ export const HomePage = () => {
           <div className="steps-grid">
             <div className="card" style={{ textAlign: 'center', padding: '30px 22px' }}>
               <BookmarkCheck size={34} color="var(--accent2)" style={{ margin: '0 auto 14px' }} />
-              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>مجموعه گلچین‌شده</h3>
+              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>کاتالوگ بررسی و تأییدشده</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px' }}>
-                دسترسی به طیف وسیعی از کتاب‌های دسته‌بندی‌شده در حوزه‌های ادبیات، مهندسی، تاریخ و علوم.
+                تمامی کتاب‌های ثبت‌شده پیش از انتشار عمومی توسط تیم کتابخانه بررسی و تأیید می‌شوند تا کیفیت و دقت مشخصات تضمین شود.
               </p>
             </div>
 
             <div className="card" style={{ textAlign: 'center', padding: '30px 22px' }}>
               <Library size={34} color="var(--accent2)" style={{ margin: '0 auto 14px' }} />
-              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>مدیریت هوشمند امانت</h3>
+              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>مدیریت هوشمند امانت و رزرو</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px' }}>
-                محاسبه خودکار موعد تحویل ۱۴ روزه، مشاهده سوابق امانت و امکان افزودن کتاب‌ها به لیست علاقه‌مندی‌ها.
+                پشتیبانی از چند جلد برای هر کتاب، امکان تمدید آنلاین مهلت مطالعه و اطلاع‌رسانی خودکار به‌محض موجود شدن کتاب‌های صف رزرو.
               </p>
             </div>
 
             <div className="card" style={{ textAlign: 'center', padding: '30px 22px' }}>
-              <MessageSquareHeart size={34} color="var(--accent2)" style={{ margin: '0 auto 14px' }} />
-              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>جامعه پویای کتاب‌خوان‌ها</h3>
+              <Wallet size={34} color="var(--accent2)" style={{ margin: '0 auto 14px' }} />
+              <h3 style={{ fontSize: '18px', marginBottom: '8px' }}>کیف‌پول یکپارچه حساب کاربری</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px' }}>
-                امکان ثبت نقد و بررسی، مشاهده درصد پیشنهاد کاربران و مشارکت مستقیم در غنی‌تر کردن کتابخانه.
+                پرداخت آسان برای خرید یا امانت کتاب، آزادسازی خودکار ودیعه پس از تحویل و دسترسی کامل به تاریخچه و کد پیگیری تراکنش‌ها.
               </p>
             </div>
           </div>
@@ -380,7 +382,7 @@ export const HomePage = () => {
               کتاب ارزشمندی می‌شناسید که جای آن در کتابخانه خالی است؟
             </h2>
             <p style={{ color: 'var(--text-dim)', fontSize: '14.5px' }}>
-              همین حالا آن را با تصویر جلد و توضیحات کامل به مجموعه کتاب‌سرا اضافه کنید تا سایر اعضا نیز از مطالعه آن بهره‌مند شوند.
+              همین حالا آن را با تصویر جلد و مشخصات کامل ثبت کنید؛ پس از بررسی و تأیید مدیریت در کاتالوگ منتشر می‌شود و درآمد حاصل از امانت یا فروش آن نیز به کیف‌پول شما تعلق می‌گیرد.
             </p>
           </div>
 

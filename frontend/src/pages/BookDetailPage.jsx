@@ -21,7 +21,10 @@ import {
   Sparkles,
   Plus,
   ShieldCheck,
-  XCircle
+  XCircle,
+  Wallet,
+  ShoppingBag,
+  Lock
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -32,12 +35,14 @@ import { formatPrice, formatPersianDate, toPersianDigits, extractApiError } from
 export const BookDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, refreshProfile } = useAuth();
   const { showToast, refreshNotifications } = useNotifications();
   const dialogRef = useRef(null);
   const dialogTitleId = useId();
   const rejectDialogRef = useRef(null);
   const rejectDialogTitleId = useId();
+  const payDialogRef = useRef(null);
+  const payDialogTitleId = useId();
 
   const [book, setBook] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,6 +52,8 @@ export const BookDetailPage = () => {
   const [doesRecommend, setDoesRecommend] = useState(true);
   const [submittingComment, setSubmittingComment] = useState(false);
   const [borrowing, setBorrowing] = useState(false);
+  const [purchasing, setPurchasing] = useState(false);
+  const [payModalMode, setPayModalMode] = useState('borrow'); // 'borrow' | 'purchase'
   const [reserving, setReserving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [togglingWishlist, setTogglingWishlist] = useState(false);
@@ -83,7 +90,7 @@ export const BookDetailPage = () => {
 
   // Fallback for browsers without native <dialog closedby="any"> support
   useEffect(() => {
-    const dialogs = [dialogRef.current, rejectDialogRef.current].filter(Boolean);
+    const dialogs = [dialogRef.current, rejectDialogRef.current, payDialogRef.current].filter(Boolean);
     if (dialogs.length === 0) return;
 
     if (!('closedBy' in HTMLDialogElement.prototype)) {
@@ -106,6 +113,15 @@ export const BookDetailPage = () => {
     }
   }, [book]);
 
+  const openPaymentModal = (mode) => {
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+    setPayModalMode(mode);
+    payDialogRef.current?.showModal();
+  };
+
   const handleBorrow = async () => {
     if (!isAuthenticated) {
       navigate('/login');
@@ -115,16 +131,40 @@ export const BookDetailPage = () => {
     setMessage(null);
     try {
       const res = await api.post(`/api/books/${id}/borrow/`);
+      if (payDialogRef.current?.open) payDialogRef.current.close();
       setMessage({ type: 'success', text: res.data.message });
       showToast(res.data.message, 'success');
-      await fetchBook();
-      await refreshNotifications();
+      await Promise.all([fetchBook(), refreshProfile(), refreshNotifications()]);
     } catch (err) {
+      if (payDialogRef.current?.open) payDialogRef.current.close();
       const errMsg = err.response?.data?.error || 'خطا در ثبت درخواست امانت کتاب.';
       setMessage({ type: 'danger', text: errMsg });
       showToast(errMsg, 'danger');
     } finally {
       setBorrowing(false);
+    }
+  };
+
+  const handlePurchase = async () => {
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+    setPurchasing(true);
+    setMessage(null);
+    try {
+      const res = await api.post(`/api/books/${id}/purchase/`);
+      if (payDialogRef.current?.open) payDialogRef.current.close();
+      setMessage({ type: 'success', text: res.data.message });
+      showToast(res.data.message, 'success');
+      await Promise.all([fetchBook(), refreshProfile(), refreshNotifications()]);
+    } catch (err) {
+      if (payDialogRef.current?.open) payDialogRef.current.close();
+      const errMsg = err.response?.data?.error || 'خطا در خرید کتاب.';
+      setMessage({ type: 'danger', text: errMsg });
+      showToast(errMsg, 'danger');
+    } finally {
+      setPurchasing(false);
     }
   };
 
@@ -597,12 +637,54 @@ export const BookDetailPage = () => {
                 color: 'var(--text-dim)',
                 lineHeight: '1.9',
                 whiteSpace: 'pre-line',
-                marginBottom: '28px',
+                marginBottom: '20px',
                 flex: 1
               }}
             >
               {book.description}
             </div>
+
+            {/* Financial Breakdown Strip */}
+            {book.financial_info && isApproved && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                  gap: '10px',
+                  padding: '14px 16px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--surface2)',
+                  border: '1px solid var(--border)',
+                  marginBottom: '20px',
+                  fontSize: '12.5px'
+                }}
+              >
+                <div>
+                  <span style={{ color: 'var(--muted)', display: 'block' }}>قیمت خرید دائمی</span>
+                  <strong style={{ fontSize: '15px', color: 'var(--accent2)' }} dir="ltr">
+                    {formatPrice(book.financial_info.purchase_price)}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--muted)', display: 'block' }}>هزینه امانت ۱۴ روزه</span>
+                  <strong style={{ fontSize: '15px', color: 'var(--text)' }} dir="ltr">
+                    {formatPrice(book.financial_info.borrow_fee)}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--muted)', display: 'block' }}>ودیعه امانت (قابل برگشت)</span>
+                  <strong style={{ fontSize: '15px', color: 'var(--success)' }} dir="ltr">
+                    {formatPrice(book.financial_info.deposit_amount)}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--muted)', display: 'block' }}>سهم ثبت‌کننده کتاب</span>
+                  <strong style={{ fontSize: '14px', color: 'var(--success)' }}>
+                    ٪{toPersianDigits(parseFloat(book.financial_info.owner_share_percent || 80))} به کیف‌پول مالک
+                  </strong>
+                </div>
+              </div>
+            )}
 
             {/* Actions Bar */}
             <div
@@ -624,11 +706,11 @@ export const BookDetailPage = () => {
                   >
                     {approvalStatus === 'rejected' ? (
                       <>
-                        <XCircle size={16} /> امکان امانت‌گیری وجود ندارد (رد شده توسط مدیریت)
+                        <XCircle size={16} /> امکان امانت‌گیری یا خرید وجود ندارد (رد شده توسط مدیریت)
                       </>
                     ) : (
                       <>
-                        <Clock size={16} /> امکان امانت‌گیری پس از تأیید مدیریت فعال می‌شود
+                        <Clock size={16} /> امکان امانت‌گیری و خرید پس از تأیید مدیریت فعال می‌شود
                       </>
                     )}
                   </div>
@@ -637,16 +719,31 @@ export const BookDetailPage = () => {
                     <CheckCircle size={16} /> این کتاب هم‌اکنون در امانت شماست
                   </div>
                 ) : book.is_available ? (
-                  <button
-                    type="button"
-                    onClick={handleBorrow}
-                    disabled={borrowing}
-                    className="btn-primary"
-                    style={{ padding: '11px 22px' }}
-                  >
-                    <BookCheck size={17} />
-                    {borrowing ? 'در حال ثبت امانت...' : 'امانت گرفتن کتاب (۱۴ روزه)'}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openPaymentModal('borrow')}
+                      disabled={borrowing || purchasing}
+                      className="btn-primary"
+                      style={{ padding: '11px 20px' }}
+                    >
+                      <BookCheck size={17} />
+                      {borrowing ? 'در حال ثبت امانت...' : 'امانت گرفتن کتاب (۱۴ روزه)'}
+                    </button>
+
+                    {(!user || user.id !== book.user) && (
+                      <button
+                        type="button"
+                        onClick={() => openPaymentModal('purchase')}
+                        disabled={purchasing || borrowing}
+                        className="btn-success"
+                        style={{ padding: '11px 20px' }}
+                      >
+                        <ShoppingBag size={17} />
+                        {purchasing ? 'در حال خرید...' : `خرید دائمی (${formatPrice(book.price)})`}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <button
                     type="button"
@@ -737,7 +834,11 @@ export const BookDetailPage = () => {
                       <strong dir="ltr" style={{ color: 'var(--text)' }}>
                         ID: #{copyItem.id}
                       </strong>
-                      {copyItem.is_available ? (
+                      {copyItem.is_sold ? (
+                        <span className="badge badge-category" style={{ fontSize: '11px', padding: '2px 8px' }}>
+                          فروخته‌شده
+                        </span>
+                      ) : copyItem.is_available ? (
                         <span className="badge badge-available" style={{ fontSize: '11px', padding: '2px 8px' }}>
                           موجود
                         </span>
@@ -746,7 +847,7 @@ export const BookDetailPage = () => {
                           امانت {copyItem.current_borrower ? `(@${copyItem.current_borrower})` : ''}
                         </span>
                       )}
-                      {copyItem.is_available && book.copies.length > 1 && (
+                      {!copyItem.is_sold && copyItem.is_available && (book.total_copies_count ?? book.copies.length) > 1 && (
                         <button
                           type="button"
                           onClick={() => handleDeleteCopy(copyItem.id)}
@@ -862,6 +963,128 @@ export const BookDetailPage = () => {
             </button>
           </div>
         </form>
+      </dialog>
+
+      {/* Native Accessible Modal Dialog for Wallet Payment Confirmation (Borrow / Purchase) */}
+      <dialog
+        ref={payDialogRef}
+        className="confirm-dialog"
+        aria-labelledby={payDialogTitleId}
+        {...({ closedby: 'any' })}
+      >
+        {(() => {
+          const fin = book.financial_info || {};
+          const userBalance = parseFloat(user?.wallet_balance ?? 0);
+          const isPurchase = payModalMode === 'purchase';
+          const requiredAmount = isPurchase
+            ? parseFloat(fin.purchase_price ?? book.price ?? 0)
+            : parseFloat(fin.total_borrow_required ?? 0);
+          const borrowFee = parseFloat(fin.borrow_fee ?? 0);
+          const depositAmount = parseFloat(fin.deposit_amount ?? 0);
+          const hasEnough = userBalance >= requiredAmount;
+          const remainingBalance = Math.max(0, userBalance - requiredAmount);
+
+          return (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: isPurchase ? 'var(--success)' : 'var(--accent2)' }}>
+                {isPurchase ? <ShoppingBag size={24} /> : <Wallet size={24} />}
+                <h2 id={payDialogTitleId} style={{ fontSize: '18.5px', fontWeight: 800 }}>
+                  {isPurchase ? 'تأیید خرید دائمی کتاب با کیف‌پول' : 'تأیید پرداخت و امانت گرفتن کتاب'}
+                </h2>
+              </div>
+
+              <div style={{ fontSize: '13.5px', color: 'var(--text-dim)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ fontWeight: 700, color: 'var(--text)', fontSize: '15px' }}>
+                  «{book.title}» — اثر {book.author}
+                </div>
+
+                <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '8px', border: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>موجودی فعلی کیف‌پول شما:</span>
+                    <strong dir="ltr" style={{ color: 'var(--success)' }}>{formatPrice(userBalance)}</strong>
+                  </div>
+
+                  {isPurchase ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>قیمت خرید دائمی کتاب:</span>
+                      <strong dir="ltr">{formatPrice(requiredAmount)}</strong>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>هزینه امانت ۱۴ روزه:</span>
+                        <strong dir="ltr">{formatPrice(borrowFee)}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <Lock size={13} color="var(--accent2)" /> ودیعه مسدودشونده (قابل برگشت):
+                        </span>
+                        <strong dir="ltr" style={{ color: 'var(--accent2)' }}>{formatPrice(depositAmount)}</strong>
+                      </div>
+                    </>
+                  )}
+
+                  <div style={{ borderTop: '1px solid var(--border)', paddingTop: '8px', display: 'flex', justifyContent: 'space-between', fontWeight: 800, color: 'var(--text)' }}>
+                    <span>مبلغ کل مورد نیاز:</span>
+                    <span dir="ltr">{formatPrice(requiredAmount)}</span>
+                  </div>
+
+                  {hasEnough && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px' }}>
+                      <span>موجودی قابل استفاده پس از تراکنش:</span>
+                      <strong dir="ltr">{formatPrice(remainingBalance)}</strong>
+                    </div>
+                  )}
+                </div>
+
+                {!hasEnough && (
+                  <div className="alert alert-danger" style={{ margin: 0, fontSize: '13px' }}>
+                    <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                    <span>
+                      موجودی کیف‌پول شما به میزان <strong>{formatPrice(requiredAmount - userBalance)}</strong> کم است. لطفاً ابتدا کیف‌پول خود را شارژ کنید.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => payDialogRef.current?.close()}
+                  className="btn-outline"
+                  autoFocus
+                >
+                  انصراف
+                </button>
+
+                {hasEnough ? (
+                  <button
+                    type="button"
+                    onClick={isPurchase ? handlePurchase : handleBorrow}
+                    disabled={borrowing || purchasing}
+                    className={isPurchase ? 'btn-success' : 'btn-primary'}
+                  >
+                    {isPurchase ? <ShoppingBag size={15} /> : <BookCheck size={15} />}
+                    {borrowing || purchasing
+                      ? 'در حال پردازش...'
+                      : isPurchase
+                        ? `پرداخت ${formatPrice(requiredAmount)} و خرید کتاب`
+                        : `تأیید و امانت کتاب (${formatPrice(requiredAmount)})`}
+                  </button>
+                ) : (
+                  <Link
+                    to="/wallet"
+                    onClick={() => payDialogRef.current?.close()}
+                    className="btn-primary"
+                  >
+                    <Wallet size={15} />
+                    رفتن به صفحه شارژ کیف‌پول
+                  </Link>
+                )}
+              </div>
+            </>
+          );
+        })()}
       </dialog>
 
       {/* Discussion & Reviews Section */}

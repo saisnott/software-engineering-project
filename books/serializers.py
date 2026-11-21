@@ -1,7 +1,20 @@
+from decimal import Decimal
 from django.db.models import Avg
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Book, BookCopy, Borrowing, Category, Comment, Notification
+from .models import (
+    Book,
+    BookCopy,
+    BookOrder,
+    Borrowing,
+    Category,
+    Comment,
+    FinancialSettings,
+    Notification,
+    Wallet,
+    WalletTransaction,
+)
+from .wallet_service import calculate_book_fees, get_user_unpaid_fines_total
 
 
 def _can_view_borrower(request):
@@ -66,8 +79,8 @@ class BookCopySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BookCopy
-        fields = ['id', 'book', 'is_available', 'created_at', 'current_borrower', 'current_borrowing_id']
-        read_only_fields = ['id', 'book', 'is_available', 'created_at', 'current_borrower', 'current_borrowing_id']
+        fields = ['id', 'book', 'is_available', 'is_sold', 'created_at', 'current_borrower', 'current_borrowing_id']
+        read_only_fields = ['id', 'book', 'is_available', 'is_sold', 'created_at', 'current_borrower', 'current_borrowing_id']
 
     def _get_active_borrowing(self, obj):
         if not _can_view_borrower(self.context.get('request')):
@@ -110,6 +123,7 @@ class BookListSerializer(serializers.ModelSerializer):
     total_borrows_count = serializers.IntegerField(source='borrowings.count', read_only=True)
     total_copies_count = serializers.SerializerMethodField()
     available_copies_count = serializers.SerializerMethodField()
+    sold_copies_count = serializers.SerializerMethodField()
     copies = serializers.SerializerMethodField()
     approval_status_label = serializers.SerializerMethodField()
     reviewed_by_username = serializers.ReadOnlyField(source='reviewed_by.username')
@@ -123,7 +137,7 @@ class BookListSerializer(serializers.ModelSerializer):
             'category', 'category_name', 'category_slug', 'comments_count',
             'average_rating', 'user', 'author_username', 'is_wishlisted',
             'current_borrower', 'total_borrows_count',
-            'total_copies_count', 'available_copies_count', 'copies'
+            'total_copies_count', 'available_copies_count', 'sold_copies_count', 'copies'
         ]
         read_only_fields = [
             'id', 'book_code', 'user', 'is_available',
@@ -138,10 +152,13 @@ class BookListSerializer(serializers.ModelSerializer):
         return f"LIB-B{obj.id:04d}"
 
     def get_total_copies_count(self, obj):
-        return len(obj.copies.all())
+        return sum(1 for c in obj.copies.all() if not c.is_sold)
 
     def get_available_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if c.is_available)
+        return sum(1 for c in obj.copies.all() if c.is_available and not c.is_sold)
+
+    def get_sold_copies_count(self, obj):
+        return sum(1 for c in obj.copies.all() if c.is_sold)
 
     def get_copies(self, obj):
         return BookCopySerializer(obj.copies.all(), many=True, context=self.context).data
@@ -182,11 +199,14 @@ class BorrowingSerializer(serializers.ModelSerializer):
             'id', 'user', 'username', 'user_email', 'borrower_name', 'book',
             'book_copy', 'copy_id', 'is_copy_deleted', 'book_details', 'borrow_date', 'due_date', 'return_date',
             'status', 'is_extended', 'returned_by', 'returned_by_username',
-            'returned_by_label', 'duration_days', 'is_late', 'late_days'
+            'returned_by_label', 'duration_days', 'is_late', 'late_days',
+            'borrow_fee_paid', 'deposit_locked', 'extend_fee_paid',
+            'late_fee_charged', 'unpaid_fine', 'is_deposit_released'
         ]
         read_only_fields = [
             'id', 'user', 'book_copy', 'copy_id', 'is_copy_deleted', 'borrow_date', 'return_date', 'status',
-            'is_extended', 'returned_by'
+            'is_extended', 'returned_by', 'borrow_fee_paid', 'deposit_locked',
+            'extend_fee_paid', 'late_fee_charged', 'unpaid_fine', 'is_deposit_released'
         ]
 
     def get_copy_id(self, obj):
@@ -250,10 +270,12 @@ class BookDetailSerializer(serializers.ModelSerializer):
     borrowing_history = serializers.SerializerMethodField()
     total_copies_count = serializers.SerializerMethodField()
     available_copies_count = serializers.SerializerMethodField()
+    sold_copies_count = serializers.SerializerMethodField()
     copies = serializers.SerializerMethodField()
     copies_count = serializers.IntegerField(write_only=True, required=False, min_value=1, max_value=100, default=1)
     approval_status_label = serializers.SerializerMethodField()
     reviewed_by_username = serializers.ReadOnlyField(source='reviewed_by.username')
+    financial_info = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -266,12 +288,14 @@ class BookDetailSerializer(serializers.ModelSerializer):
             'is_borrowed_by_user', 'is_wishlisted', 'is_reserved_by_user',
             'waitlist_count', 'related_books', 'current_borrower',
             'total_borrows_count', 'borrowing_history',
-            'total_copies_count', 'available_copies_count', 'copies', 'copies_count'
+            'total_copies_count', 'available_copies_count', 'sold_copies_count', 'copies', 'copies_count',
+            'financial_info'
         ]
         read_only_fields = [
             'id', 'book_code', 'qr_payload', 'user', 'is_available',
             'approval_status', 'approval_status_label', 'rejection_reason',
-            'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at'
+            'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at',
+            'financial_info'
         ]
 
     def get_approval_status_label(self, obj):
@@ -281,10 +305,17 @@ class BookDetailSerializer(serializers.ModelSerializer):
         return f"LIB-B{obj.id:04d}"
 
     def get_total_copies_count(self, obj):
-        return len(obj.copies.all())
+        return sum(1 for c in obj.copies.all() if not c.is_sold)
 
     def get_available_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if c.is_available)
+        return sum(1 for c in obj.copies.all() if c.is_available and not c.is_sold)
+
+    def get_sold_copies_count(self, obj):
+        return sum(1 for c in obj.copies.all() if c.is_sold)
+
+    def get_financial_info(self, obj):
+        fees = calculate_book_fees(obj)
+        return {k: f'{v:.2f}' for k, v in fees.items()}
 
     def get_copies(self, obj):
         return BookCopySerializer(obj.copies.all(), many=True, context=self.context).data
@@ -358,4 +389,132 @@ class BookDetailSerializer(serializers.ModelSerializer):
         else:
             related = list(qs.order_by('-id')[:4])
         return BookListSerializer(related, many=True, context=self.context).data
+
+
+class FinancialSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancialSettings
+        fields = [
+            'borrow_fee_percent', 'deposit_percent', 'owner_share_percent',
+            'extend_fee_amount', 'daily_late_fee', 'signup_bonus',
+            'max_topup_amount', 'updated_at'
+        ]
+        read_only_fields = ['updated_at']
+
+    def validate_borrow_fee_percent(self, value):
+        if value < Decimal('0.00') or value > Decimal('100.00'):
+            raise serializers.ValidationError('درصد هزینه امانت باید بین ۰ تا ۱۰۰ باشد.')
+        return value
+
+    def validate_deposit_percent(self, value):
+        if value < Decimal('0.00') or value > Decimal('100.00'):
+            raise serializers.ValidationError('درصد ودیعه باید بین ۰ تا ۱۰۰ باشد.')
+        return value
+
+    def validate_owner_share_percent(self, value):
+        if value < Decimal('0.00') or value > Decimal('100.00'):
+            raise serializers.ValidationError('درصد سهم مالک کتاب باید بین ۰ تا ۱۰۰ باشد.')
+        return value
+
+    def validate_extend_fee_amount(self, value):
+        if value < Decimal('0.00'):
+            raise serializers.ValidationError('هزینه تمدید نمی‌تواند منفی باشد.')
+        return value
+
+    def validate_daily_late_fee(self, value):
+        if value < Decimal('0.00'):
+            raise serializers.ValidationError('جریمه روزانه نمی‌تواند منفی باشد.')
+        return value
+
+    def validate_signup_bonus(self, value):
+        if value < Decimal('0.00'):
+            raise serializers.ValidationError('اعتبار اولیه ثبت‌نام نمی‌تواند منفی باشد.')
+        return value
+
+    def validate_max_topup_amount(self, value):
+        if value < Decimal('1.00'):
+            raise serializers.ValidationError('سقف شارژ کیف‌پول باید حداقل ۱ دلار باشد.')
+        return value
+
+
+class WalletSerializer(serializers.ModelSerializer):
+    username = serializers.ReadOnlyField(source='user.username')
+    unpaid_fines_total = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Wallet
+        fields = [
+            'id', 'user', 'username', 'balance', 'locked_balance',
+            'is_frozen', 'unpaid_fines_total', 'created_at', 'updated_at'
+        ]
+        read_only_fields = fields
+
+    def get_unpaid_fines_total(self, obj):
+        return f'{get_user_unpaid_fines_total(obj.user):.2f}'
+
+
+class WalletTransactionSerializer(serializers.ModelSerializer):
+    username = serializers.ReadOnlyField(source='wallet.user.username')
+    tx_type_label = serializers.CharField(source='get_tx_type_display', read_only=True)
+    direction_label = serializers.CharField(source='get_direction_display', read_only=True)
+    created_by_username = serializers.ReadOnlyField(source='created_by.username')
+    book_title = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WalletTransaction
+        fields = [
+            'id', 'reference_code', 'username', 'tx_type', 'tx_type_label',
+            'direction', 'direction_label', 'amount', 'platform_commission',
+            'balance_before', 'balance_after', 'description',
+            'related_book', 'book_title', 'related_borrowing', 'related_order',
+            'created_by', 'created_by_username', 'created_at'
+        ]
+        read_only_fields = fields
+
+    def get_book_title(self, obj):
+        if obj.related_book:
+            return obj.related_book.title
+        return obj.book_title_snapshot or ''
+
+
+class BookOrderSerializer(serializers.ModelSerializer):
+    buyer_username = serializers.SerializerMethodField()
+    seller_username = serializers.SerializerMethodField()
+    book_title = serializers.SerializerMethodField()
+    book_author = serializers.SerializerMethodField()
+    book_cover = serializers.SerializerMethodField()
+    copy_id = serializers.SerializerMethodField()
+    status_label = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = BookOrder
+        fields = [
+            'id', 'order_code', 'buyer', 'buyer_username', 'seller', 'seller_username',
+            'book', 'book_title', 'book_author', 'book_cover', 'copy_id',
+            'total_price', 'owner_share', 'platform_commission',
+            'status', 'status_label', 'created_at'
+        ]
+        read_only_fields = fields
+
+    def get_buyer_username(self, obj):
+        return obj.buyer.username if obj.buyer else (obj.buyer_username_snapshot or 'کاربر حذف‌شده')
+
+    def get_seller_username(self, obj):
+        return obj.seller.username if obj.seller else (obj.seller_username_snapshot or 'کتابخانه مرکزی')
+
+    def get_book_title(self, obj):
+        return obj.book.title if obj.book else obj.book_title_snapshot
+
+    def get_book_author(self, obj):
+        return obj.book.author if obj.book else obj.book_author_snapshot
+
+    def get_book_cover(self, obj):
+        if obj.book and obj.book.covers:
+            request = self.context.get('request')
+            url = obj.book.covers.url
+            return request.build_absolute_uri(url) if request else url
+        return None
+
+    def get_copy_id(self, obj):
+        return obj.book_copy_id or obj.copy_id_snapshot
 

@@ -178,7 +178,7 @@ class SuperuserUserDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
             active_book_ids = [b_id for b_id, _ in active_loans if b_id]
             active_copy_ids = [c_id for _, c_id in active_loans if c_id]
             if active_copy_ids:
-                BookCopy.objects.filter(id__in=active_copy_ids).update(is_available=True)
+                BookCopy.objects.filter(id__in=active_copy_ids, is_sold=False).update(is_available=True)
             response = super().destroy(request, *args, **kwargs)
             if active_book_ids:
                 for b in Book.objects.filter(id__in=active_book_ids):

@@ -1,8 +1,9 @@
 import re
 from datetime import timedelta
+from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Avg, F, Prefetch, Q
+from django.db.models import Avg, F, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -10,18 +11,54 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Book, BookCopy, Borrowing, Category, Comment, Notification
+from .models import (
+    Book,
+    BookCopy,
+    BookOrder,
+    Borrowing,
+    Category,
+    Comment,
+    FinancialSettings,
+    Notification,
+    Wallet,
+    WalletTransaction,
+)
 from .serializers import (
     BookCopySerializer,
     BookDetailSerializer,
     BookListSerializer,
+    BookOrderSerializer,
     BorrowingSerializer,
     CategorySerializer,
     CommentSerializer,
+    FinancialSettingsSerializer,
     NotificationSerializer,
+    WalletSerializer,
+    WalletTransactionSerializer,
+)
+from .wallet_service import (
+    ZERO,
+    WalletOperationError,
+    adjust_wallet_by_admin,
+    charge_and_split_purchase,
+    charge_borrow_and_lock_deposit,
+    charge_extension_fee,
+    ensure_user_wallet,
+    get_financial_settings,
+    get_user_unpaid_fines_total,
+    quantize_money,
+    settle_all_unpaid_fines,
+    settle_return_deposit_and_fines,
+    topup_wallet,
 )
 
 User = get_user_model()
+
+
+class IsSuperUser(permissions.BasePermission):
+    """Strict permission allowing only superusers."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
 
 
 def _parse_strict_int_in_range(raw_value, min_val=1, max_val=50):
@@ -327,6 +364,11 @@ class BookDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
                 {'error': 'این کتاب هم‌اکنون در امانت است و تا زمان بازگشت امکان حذف آن وجود ندارد.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        if Borrowing.objects.filter(book=instance, unpaid_fine__gt=ZERO).exists():
+            return Response(
+                {'error': 'این کتاب دارای جریمه دیرکرد تسویه‌نشده است و تا زمان تسویه آن امکان حذف کتاب وجود ندارد.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         return super().destroy(request, *args, **kwargs)
 
 
@@ -444,12 +486,14 @@ class BookCopyCreateAPIView(APIView):
             )
 
         all_copies = book.copies.all()
+        unsold_copies = all_copies.filter(is_sold=False)
         return Response({
             'message': f'{count} جلد جدید به کتاب «{book.title}» اضافه شد.',
             'created_copies': BookCopySerializer(created_copies, many=True, context={'request': request}).data,
             'copies': BookCopySerializer(all_copies, many=True, context={'request': request}).data,
-            'total_copies_count': all_copies.count(),
-            'available_copies_count': all_copies.filter(is_available=True).count(),
+            'total_copies_count': unsold_copies.count(),
+            'available_copies_count': unsold_copies.filter(is_available=True).count(),
+            'sold_copies_count': all_copies.filter(is_sold=True).count(),
             'is_available': book.is_available,
         }, status=status.HTTP_201_CREATED)
 
@@ -467,12 +511,17 @@ class BookCopyDeleteAPIView(APIView):
 
         with transaction.atomic():
             copy_obj = get_object_or_404(BookCopy.objects.select_for_update(), id=copy_id, book=book)
+            if copy_obj.is_sold:
+                return Response(
+                    {'error': f'شناسه #{copy_obj.id} قبلاً فروخته شده است و امکان حذف آن وجود ندارد.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             if not copy_obj.is_available or Borrowing.objects.filter(book_copy=copy_obj, return_date__isnull=True).exists():
                 return Response(
                     {'error': f'شناسه #{copy_obj.id} هم‌اکنون در دست امانت است و امکان حذف آن وجود ندارد.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            if book.copies.count() <= 1:
+            if book.copies.filter(is_sold=False).count() <= 1:
                 return Response(
                     {'error': 'هر کتاب باید حداقل ۱ شناسه داشته باشد. برای حذف کامل کتاب از گزینه حذف کتاب استفاده کنید.'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -483,11 +532,13 @@ class BookCopyDeleteAPIView(APIView):
             book.sync_availability()
 
         all_copies = book.copies.all()
+        unsold_copies = all_copies.filter(is_sold=False)
         return Response({
             'message': f'شناسه #{deleted_id} با موفقیت حذف شد.',
             'copies': BookCopySerializer(all_copies, many=True, context={'request': request}).data,
-            'total_copies_count': all_copies.count(),
-            'available_copies_count': all_copies.filter(is_available=True).count(),
+            'total_copies_count': unsold_copies.count(),
+            'available_copies_count': unsold_copies.filter(is_available=True).count(),
+            'sold_copies_count': all_copies.filter(is_sold=True).count(),
             'is_available': book.is_available,
         }, status=status.HTTP_200_OK)
 
@@ -524,63 +575,134 @@ class BorrowBookAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        with transaction.atomic():
-            book = get_object_or_404(Book.objects.select_for_update(), id=pk)
+        try:
+            with transaction.atomic():
+                book = get_object_or_404(Book.objects.select_for_update(), id=pk)
 
-            if book.approval_status != 'approved':
-                return Response(
-                    {"error": "این کتاب هنوز توسط مدیریت کتابخانه تأیید نشده است و امکان امانت‌گیری آن وجود ندارد."},
-                    status=status.HTTP_400_BAD_REQUEST
+                if book.approval_status != 'approved':
+                    return Response(
+                        {"error": "این کتاب هنوز توسط مدیریت کتابخانه تأیید نشده است و امکان امانت‌گیری آن وجود ندارد."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if Borrowing.objects.filter(book=book, user=request.user, return_date__isnull=True).exists():
+                    return Response(
+                        {"error": "شما قبلاً این کتاب را امانت گرفته‌اید."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if not book.copies.exists():
+                    BookCopy.objects.create(book=book, is_available=book.is_available)
+
+                available_copy = (
+                    BookCopy.objects.select_for_update()
+                    .filter(book=book, is_available=True, is_sold=False)
+                    .order_by('id')
+                    .first()
+                )
+                if not available_copy or not book.is_available:
+                    book.sync_availability()
+                    return Response(
+                        {"error": "این کتاب در حال حاضر موجود نیست (امانت داده شده یا فروخته شده است)."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                borrowing = Borrowing.objects.create(
+                    user=request.user,
+                    book=book,
+                    book_copy=available_copy,
+                    borrow_date=timezone.now(),
+                    status='borrowed'
                 )
 
-            if Borrowing.objects.filter(book=book, user=request.user, return_date__isnull=True).exists():
-                return Response(
-                    {"error": "شما قبلاً این کتاب را امانت گرفته‌اید."},
-                    status=status.HTTP_400_BAD_REQUEST
+                fee_summary = charge_borrow_and_lock_deposit(
+                    borrower=request.user,
+                    book=book,
+                    borrowing=borrowing,
+                    waive_fee=False,
+                    actor=request.user,
                 )
 
-            if not book.copies.exists():
-                BookCopy.objects.create(book=book, is_available=book.is_available)
+                available_copy.is_available = False
+                available_copy.save(update_fields=['is_available'])
 
-            available_copy = (
-                BookCopy.objects.select_for_update()
-                .filter(book=book, is_available=True)
-                .order_by('id')
-                .first()
-            )
-            if not available_copy or not book.is_available:
+                # Remove user from waitlist if they had reserved it
+                book.waitlist.remove(request.user)
                 book.sync_availability()
-                return Response(
-                    {"error": "این کتاب در حال حاضر امانت داده شده است."},
-                    status=status.HTTP_400_BAD_REQUEST
+
+                fee_note = ''
+                if fee_summary['borrow_fee'] > ZERO or fee_summary['deposit_locked'] > ZERO:
+                    fee_note = (
+                        f" (هزینه امانت: ${fee_summary['borrow_fee']:.2f} | "
+                        f"ودیعه بلوکه‌شده: ${fee_summary['deposit_locked']:.2f})"
+                    )
+
+                Notification.objects.create(
+                    user=request.user,
+                    title='امانت کتاب ثبت شد',
+                    message=f"کتاب «{book.title}» (شناسه #{available_copy.id}) با موفقیت برای شما به امانت ثبت شد. مهلت بازگشت: ۱۴ روز.{fee_note}",
+                    notif_type='borrow',
+                    link=f'/books/{book.id}'
                 )
+        except WalletOperationError as exc:
+            payload = {"error": exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
-            available_copy.is_available = False
-            available_copy.save(update_fields=['is_available'])
-
-            borrowing = Borrowing.objects.create(
-                user=request.user,
-                book=book,
-                book_copy=available_copy,
-                borrow_date=timezone.now(),
-                status='borrowed'
-            )
-
-            # Remove user from waitlist if they had reserved it
-            book.waitlist.remove(request.user)
-            book.sync_availability()
-
-            Notification.objects.create(
-                user=request.user,
-                title='امانت کتاب ثبت شد',
-                message=f"کتاب «{book.title}» (شناسه #{available_copy.id}) با موفقیت برای شما به امانت ثبت شد. مهلت بازگشت: ۱۴ روز.",
-                notif_type='borrow',
-                link=f'/books/{book.id}'
-            )
-
+        wallet = ensure_user_wallet(request.user)
         return Response({
             "message": f"کتاب '{book.title}' (شناسه #{available_copy.id}) با موفقیت امانت گرفته شد.",
-            "borrowing": BorrowingSerializer(borrowing, context={'request': request}).data
+            "borrowing": BorrowingSerializer(borrowing, context={'request': request}).data,
+            "wallet": WalletSerializer(wallet).data,
+        }, status=status.HTTP_201_CREATED)
+
+
+class PurchaseBookAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            with transaction.atomic():
+                book = get_object_or_404(Book.objects.select_for_update(), id=pk)
+
+                if book.approval_status != 'approved':
+                    return Response(
+                        {"error": "این کتاب هنوز توسط مدیریت کتابخانه تأیید نشده است و امکان خرید آن وجود ندارد."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if not book.copies.exists():
+                    BookCopy.objects.create(book=book, is_available=book.is_available)
+
+                available_copy = (
+                    BookCopy.objects.select_for_update()
+                    .filter(book=book, is_available=True, is_sold=False)
+                    .order_by('id')
+                    .first()
+                )
+                if not available_copy or not book.is_available:
+                    book.sync_availability()
+                    return Response(
+                        {"error": "در حال حاضر جلد آزادی از این کتاب برای خرید در مخزن موجود نیست."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                order, tx = charge_and_split_purchase(
+                    buyer=request.user,
+                    book=book,
+                    copy_obj=available_copy,
+                )
+        except WalletOperationError as exc:
+            payload = {"error": exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+        wallet = ensure_user_wallet(request.user)
+        return Response({
+            "message": f"کتاب «{book.title}» (جلد #{available_copy.id}) با موفقیت به مبلغ ${order.total_price:.2f} خریداری شد.",
+            "order": BookOrderSerializer(order, context={'request': request}).data,
+            "transaction": WalletTransactionSerializer(tx).data,
+            "wallet": WalletSerializer(wallet).data,
         }, status=status.HTTP_201_CREATED)
 
 
@@ -589,7 +711,7 @@ class ReturnBookAPIView(APIView):
 
     def post(self, request, pk):
         with transaction.atomic():
-            qs = Borrowing.objects.select_for_update()
+            qs = Borrowing.objects.select_for_update().select_related('book', 'book__user', 'user')
             if request.user.is_staff or request.user.is_superuser:
                 borrowing = get_object_or_404(qs, id=pk)
             else:
@@ -601,27 +723,38 @@ class ReturnBookAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            borrowing.return_date = timezone.now()
+            return_dt = timezone.now()
+            borrowing.return_date = return_dt
             borrowing.status = 'returned'
             borrowing.returned_by = request.user
             borrowing.save(update_fields=['return_date', 'status', 'returned_by'])
 
             book = Book.objects.select_for_update().get(pk=borrowing.book_id)
             if borrowing.book_copy_id:
-                BookCopy.objects.filter(pk=borrowing.book_copy_id).update(is_available=True)
+                BookCopy.objects.filter(pk=borrowing.book_copy_id, is_sold=False).update(is_available=True)
             else:
-                unavailable_copy = BookCopy.objects.filter(book=book, is_available=False).order_by('id').first()
+                unavailable_copy = BookCopy.objects.filter(book=book, is_available=False, is_sold=False).order_by('id').first()
                 if unavailable_copy:
                     unavailable_copy.is_available = True
                     unavailable_copy.save(update_fields=['is_available'])
             book.sync_availability()
 
+            settlement = settle_return_deposit_and_fines(borrowing, return_dt, actor=request.user)
+
             days = max(1, (borrowing.return_date - borrowing.borrow_date).days) if borrowing.borrow_date else 1
+            finance_note = ''
+            if settlement['deposit_released'] > ZERO:
+                finance_note += f" ودیعه ${settlement['deposit_released']:.2f} به کیف‌پول آزاد شد."
+            if settlement['late_fee'] > ZERO:
+                finance_note += f" جریمه تأخیر ({settlement['late_days']} روز): ${settlement['late_fee']:.2f}."
+                if settlement['unpaid_fine'] > ZERO:
+                    finance_note += f" مانده جریمه تسویه‌نشده: ${settlement['unpaid_fine']:.2f}."
+
             if request.user.id == borrowing.user_id:
                 Notification.objects.create(
                     user=borrowing.user,
                     title='تحویل کتاب به کتابخانه',
-                    message=f"کتاب «{book.title}» پس از {days} روز مطالعه با موفقیت به کتابخانه بازگردانده شد.",
+                    message=f"کتاب «{book.title}» پس از {days} روز مطالعه با موفقیت به کتابخانه بازگردانده شد.{finance_note}",
                     notif_type='return',
                     link=f'/books/{book.id}'
                 )
@@ -629,7 +762,7 @@ class ReturnBookAPIView(APIView):
                 Notification.objects.create(
                     user=borrowing.user,
                     title='ثبت تحویل کتاب توسط مدیریت',
-                    message=f"تحویل کتاب «{book.title}» توسط مدیریت کتابخانه (@{request.user.username}) ثبت شد و از لیست امانت‌های فعال شما خارج گردید.",
+                    message=f"تحویل کتاب «{book.title}» توسط مدیریت کتابخانه (@{request.user.username}) ثبت شد و از لیست امانت‌های فعال شما خارج گردید.{finance_note}",
                     notif_type='return',
                     link='/dashboard'
                 )
@@ -641,7 +774,14 @@ class ReturnBookAPIView(APIView):
             )
 
         return Response({
-            "message": f"کتاب '{book.title}' با موفقیت به کتابخانه بازگردانده شد."
+            "message": f"کتاب '{book.title}' با موفقیت به کتابخانه بازگردانده شد.{finance_note}",
+            "settlement": {
+                "late_days": settlement['late_days'],
+                "late_fee": f"{settlement['late_fee']:.2f}",
+                "deposit_released": f"{settlement['deposit_released']:.2f}",
+                "collected_fine": f"{settlement['collected_fine']:.2f}",
+                "unpaid_fine": f"{settlement['unpaid_fine']:.2f}",
+            }
         }, status=status.HTTP_200_OK)
 
 
@@ -649,29 +789,45 @@ class ExtendBorrowingAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        borrowing = get_object_or_404(Borrowing, id=pk, user=request.user, return_date__isnull=True)
+        try:
+            with transaction.atomic():
+                borrowing = get_object_or_404(
+                    Borrowing.objects.select_for_update().select_related('book', 'book__user'),
+                    id=pk,
+                    user=request.user,
+                    return_date__isnull=True
+                )
 
-        if borrowing.is_extended:
-            return Response(
-                {"error": "مهلت امانت این کتاب قبلاً یک بار تمدید شده است."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+                if borrowing.is_extended:
+                    return Response(
+                        {"error": "مهلت امانت این کتاب قبلاً یک بار تمدید شده است."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
-        borrowing.due_date = borrowing.due_date + timedelta(days=7)
-        borrowing.is_extended = True
-        borrowing.save()
+                extend_fee = charge_extension_fee(request.user, borrowing)
 
-        Notification.objects.create(
-            user=borrowing.user,
-            title='تمدید مهلت امانت کتاب',
-            message=f"مهلت امانت کتاب «{borrowing.book.title}» به مدت ۷ روز دیگر با موفقیت تمدید شد.",
-            notif_type='extend',
-            link='/dashboard'
-        )
+                borrowing.due_date = borrowing.due_date + timedelta(days=7)
+                borrowing.is_extended = True
+                borrowing.save(update_fields=['due_date', 'is_extended'])
 
+                fee_text = f" (هزینه تمدید: ${extend_fee:.2f})" if extend_fee > ZERO else ""
+                Notification.objects.create(
+                    user=borrowing.user,
+                    title='تمدید مهلت امانت کتاب',
+                    message=f"مهلت امانت کتاب «{borrowing.book.title}» به مدت ۷ روز دیگر با موفقیت تمدید شد.{fee_text}",
+                    notif_type='extend',
+                    link='/dashboard'
+                )
+        except WalletOperationError as exc:
+            payload = {"error": exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+        wallet = ensure_user_wallet(request.user)
         return Response({
             "message": f"مهلت امانت کتاب '{borrowing.book.title}' به مدت ۷ روز تمدید شد.",
-            "borrowing": BorrowingSerializer(borrowing, context={'request': request}).data
+            "borrowing": BorrowingSerializer(borrowing, context={'request': request}).data,
+            "wallet": WalletSerializer(wallet).data,
         }, status=status.HTTP_200_OK)
 
 
@@ -842,6 +998,13 @@ class UserDashboardAPIView(APIView):
             else ("کارمند کتابخانه" if user_obj.is_staff else "عضو رسمی کتابخانه")
         )
 
+        wallet = ensure_user_wallet(user_obj)
+        purchased_orders = BookOrder.objects.filter(buyer=user_obj).select_related('book', 'seller', 'buyer')[:50]
+        owner_earnings_total = quantize_money(
+            wallet.transactions.filter(tx_type='owner_earning').aggregate(total=Sum('amount')).get('total') or ZERO
+        )
+        fin_settings = get_financial_settings()
+
         return Response({
             'member_card': {
                 'member_code': member_code,
@@ -856,6 +1019,13 @@ class UserDashboardAPIView(APIView):
                 'on_time_rate': on_time_rate,
                 'qr_payload': f"BOOKSTORE-MEMBER:{member_code}|USER:{user_obj.username}",
             },
+            'wallet_summary': {
+                **WalletSerializer(wallet).data,
+                'owner_earnings_total': f'{owner_earnings_total:.2f}',
+                'extend_fee_amount': f'{fin_settings.extend_fee_amount:.2f}',
+                'daily_late_fee': f'{fin_settings.daily_late_fee:.2f}',
+            },
+            'purchased_orders': BookOrderSerializer(purchased_orders, many=True, context={'request': request}).data,
             'current_borrowings': BorrowingSerializer(current_borrowings, many=True, context={'request': request}).data,
             'borrowing_history': BorrowingSerializer(borrowing_history, many=True, context={'request': request}).data,
             'wishlist': BookListSerializer(wishlist_books, many=True, context={'request': request}).data,
@@ -954,11 +1124,13 @@ class LibraryManagerStatsAPIView(APIView):
     def get(self, request):
         now = timezone.now()
         approved_copies_qs = BookCopy.objects.filter(book__approval_status='approved')
+        unsold_approved_copies_qs = approved_copies_qs.filter(is_sold=False)
         approved_titles_qs = Book.objects.filter(approval_status='approved')
-        total_copies = approved_copies_qs.count()
+        total_copies = unsold_approved_copies_qs.count()
+        sold_copies_count = approved_copies_qs.filter(is_sold=True).count()
         total_titles = approved_titles_qs.count()
         total_books = total_copies if total_copies > 0 else total_titles
-        borrowed_count = approved_copies_qs.filter(is_available=False).count()
+        borrowed_count = unsold_approved_copies_qs.filter(is_available=False).count()
         available_count = max(0, total_books - borrowed_count)
         categories = Category.objects.all()
         categories_count = categories.count()
@@ -992,10 +1164,12 @@ class LibraryManagerStatsAPIView(APIView):
                 overdue_users_set.add(ab.user_id)
 
         members_qs = User.objects.filter(is_active=True).order_by('username')
+        wallets_map = {w.user_id: w for w in Wallet.objects.filter(user__is_active=True)}
         members_directory = []
         for u in members_qs:
             full_name = f"{u.first_name} {u.last_name}".strip() or u.username
             m_code = f"LIB-U{u.id:04d}"
+            w = wallets_map.get(u.id) or ensure_user_wallet(u)
             members_directory.append({
                 'id': u.id,
                 'username': u.username,
@@ -1007,12 +1181,15 @@ class LibraryManagerStatsAPIView(APIView):
                 'is_superuser': u.is_superuser,
                 'active_loans_count': active_loans_by_user.get(u.id, 0),
                 'has_overdue': u.id in overdue_users_set,
+                'wallet_balance': f'{w.balance:.2f}',
+                'wallet_locked_balance': f'{w.locked_balance:.2f}',
+                'wallet_is_frozen': bool(w.is_frozen),
             })
 
         books_qs = Book.objects.filter(approval_status='approved').select_related('category').prefetch_related('copies').order_by('-is_available', 'title')
         books_directory = []
         for b in books_qs:
-            all_copies = list(b.copies.all())
+            all_copies = [c for c in b.copies.all() if not c.is_sold]
             avail_copies = [c for c in all_copies if c.is_available]
             books_directory.append({
                 'id': b.id,
@@ -1050,6 +1227,7 @@ class LibraryManagerStatsAPIView(APIView):
             'total_titles': total_titles,
             'borrowed_count': borrowed_count,
             'available_count': available_count,
+            'sold_copies_count': sold_copies_count,
             'categories_count': categories_count,
             'pending_books_count': len(pending_books_list),
             'rejected_books_count': len(rejected_books_list),
@@ -1222,70 +1400,86 @@ class StaffQuickBorrowAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        with transaction.atomic():
-            book = Book.objects.select_for_update().get(pk=resolved_book.pk)
-            if book.approval_status != 'approved':
-                return Response(
-                    {'error': f'کتاب «{book.title}» هنوز در وضعیت تأییدشده قرار ندارد. لطفاً ابتدا آن را تأیید کنید.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if Borrowing.objects.filter(book=book, user=target_user, return_date__isnull=True).exists():
-                return Response(
-                    {'error': f'کاربر @{target_user.username} هم‌اکنون یک جلد از کتاب «{book.title}» را در دست امانت دارد.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        raw_waive = request.data.get('waive_fee', False)
+        waive_fee = str(raw_waive).strip().lower() in ('true', '1', 'yes') if not isinstance(raw_waive, bool) else raw_waive
 
-            if not book.copies.exists():
-                BookCopy.objects.create(book=book, is_available=book.is_available)
-
-            if explicit_copy_id is not None:
-                selected_copy = BookCopy.objects.select_for_update().filter(id=explicit_copy_id, book=book).first()
-                if not selected_copy or not selected_copy.is_available:
+        try:
+            with transaction.atomic():
+                book = Book.objects.select_for_update().get(pk=resolved_book.pk)
+                if book.approval_status != 'approved':
                     return Response(
-                        {'error': f'جلد انتخاب‌شده (شناسه #{explicit_copy_id}) از کتاب «{book.title}» در حال حاضر موجود نیست.'},
+                        {'error': f'کتاب «{book.title}» هنوز در وضعیت تأییدشده قرار ندارد. لطفاً ابتدا آن را تأیید کنید.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-            else:
-                selected_copy = (
-                    BookCopy.objects.select_for_update()
-                    .filter(book=book, is_available=True)
-                    .order_by('id')
-                    .first()
-                )
-                if not selected_copy or not book.is_available:
-                    active_loan = Borrowing.objects.filter(book=book, return_date__isnull=True).select_related('user').first()
-                    holder = f"@{active_loan.user.username}" if active_loan and active_loan.user else "کاربران دیگر"
+                if Borrowing.objects.filter(book=book, user=target_user, return_date__isnull=True).exists():
                     return Response(
-                        {'error': f'تمامی جلدهای کتاب «{book.title}» هم‌اکنون در امانت ({holder}) است و در قفسه موجود نیست.'},
+                        {'error': f'کاربر @{target_user.username} هم‌اکنون یک جلد از کتاب «{book.title}» را در دست امانت دارد.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-            selected_copy.is_available = False
-            selected_copy.save(update_fields=['is_available'])
+                if not book.copies.exists():
+                    BookCopy.objects.create(book=book, is_available=book.is_available)
 
-            due_date = timezone.now() + timedelta(days=days)
-            borrowing = Borrowing.objects.create(
-                user=target_user,
-                book=book,
-                book_copy=selected_copy,
-                due_date=due_date,
-                status='borrowed'
-            )
-            book.sync_availability()
+                if explicit_copy_id is not None:
+                    selected_copy = BookCopy.objects.select_for_update().filter(id=explicit_copy_id, book=book).first()
+                    if not selected_copy or not selected_copy.is_available or selected_copy.is_sold:
+                        return Response(
+                            {'error': f'جلد انتخاب‌شده (شناسه #{explicit_copy_id}) از کتاب «{book.title}» در حال حاضر موجود نیست.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                else:
+                    selected_copy = (
+                        BookCopy.objects.select_for_update()
+                        .filter(book=book, is_available=True, is_sold=False)
+                        .order_by('id')
+                        .first()
+                    )
+                    if not selected_copy or not book.is_available:
+                        active_loan = Borrowing.objects.filter(book=book, return_date__isnull=True).select_related('user').first()
+                        holder = f"@{active_loan.user.username}" if active_loan and active_loan.user else "کاربران دیگر"
+                        return Response(
+                            {'error': f'تمامی جلدهای کتاب «{book.title}» هم‌اکنون در امانت ({holder}) یا فروخته‌شده است و در قفسه موجود نیست.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
 
-            if book.waitlist.filter(id=target_user.id).exists():
-                book.waitlist.remove(target_user)
+                due_date = timezone.now() + timedelta(days=days)
+                borrowing = Borrowing.objects.create(
+                    user=target_user,
+                    book=book,
+                    book_copy=selected_copy,
+                    due_date=due_date,
+                    status='borrowed'
+                )
 
-            Notification.objects.create(
-                user=target_user,
-                title=f"ثبت امانت حضوری: «{book.title}»",
-                message=(
-                    f"کتاب «{book.title}» (شناسه #{selected_copy.id}) توسط مسئول میز امانت (@{request.user.username}) "
-                    f"به مدت {days} روز برای شما ثبت شد."
-                ),
-                notif_type='borrow',
-                link='/dashboard'
-            )
+                charge_borrow_and_lock_deposit(
+                    borrower=target_user,
+                    book=book,
+                    borrowing=borrowing,
+                    waive_fee=waive_fee,
+                    actor=request.user,
+                )
+
+                selected_copy.is_available = False
+                selected_copy.save(update_fields=['is_available'])
+                book.sync_availability()
+
+                if book.waitlist.filter(id=target_user.id).exists():
+                    book.waitlist.remove(target_user)
+
+                Notification.objects.create(
+                    user=target_user,
+                    title=f"ثبت امانت حضوری: «{book.title}»",
+                    message=(
+                        f"کتاب «{book.title}» (شناسه #{selected_copy.id}) توسط مسئول میز امانت (@{request.user.username}) "
+                        f"به مدت {days} روز برای شما ثبت شد."
+                    ),
+                    notif_type='borrow',
+                    link='/dashboard'
+                )
+        except WalletOperationError as exc:
+            payload = {'error': exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
             {
@@ -1365,4 +1559,211 @@ class NotificationMarkReadAPIView(APIView):
 
         unread_count = Notification.objects.filter(user=request.user, is_read=False).count()
         return Response({'unread_count': unread_count})
+
+
+class WalletDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        wallet = ensure_user_wallet(request.user)
+        tx_type = request.query_params.get('tx_type', '').strip()
+        tx_qs = wallet.transactions.select_related('related_book', 'created_by', 'wallet__user')
+        if tx_type:
+            tx_qs = tx_qs.filter(tx_type=tx_type)
+
+        all_txs = wallet.transactions.all()
+        total_topups = quantize_money(
+            all_txs.filter(tx_type__in=['topup', 'signup_bonus', 'admin_credit']).aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        total_earnings = quantize_money(
+            all_txs.filter(tx_type='owner_earning').aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        total_spent = quantize_money(
+            all_txs.filter(tx_type__in=['purchase', 'borrow_fee', 'extend_fee', 'late_fee', 'fine_settlement', 'admin_debit']).aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        fin_settings = get_financial_settings()
+
+        return Response({
+            'wallet': WalletSerializer(wallet).data,
+            'summary': {
+                'total_topups': f'{total_topups:.2f}',
+                'total_earnings': f'{total_earnings:.2f}',
+                'total_spent': f'{total_spent:.2f}',
+                'unpaid_fines_total': f'{get_user_unpaid_fines_total(request.user):.2f}',
+            },
+            'settings': FinancialSettingsSerializer(fin_settings).data,
+            'transactions': WalletTransactionSerializer(tx_qs[:100], many=True).data,
+        })
+
+
+class WalletTopUpAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        try:
+            wallet, tx = topup_wallet(request.user, request.data.get('amount'), actor=request.user)
+        except WalletOperationError as exc:
+            payload = {'error': exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            'message': f'کیف‌پول شما با موفقیت به مبلغ ${tx.amount:.2f} شارژ شد.',
+            'wallet': WalletSerializer(wallet).data,
+            'transaction': WalletTransactionSerializer(tx).data,
+        }, status=status.HTTP_201_CREATED)
+
+
+class WalletPayFinesAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        try:
+            wallet, total_paid = settle_all_unpaid_fines(request.user)
+        except WalletOperationError as exc:
+            payload = {'error': exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            'message': f'تمامی جریمه‌های معوقه به مبلغ ${total_paid:.2f} با موفقیت تسویه شد.',
+            'paid_amount': f'{total_paid:.2f}',
+            'wallet': WalletSerializer(wallet).data,
+        }, status=status.HTTP_200_OK)
+
+
+class UserOrdersListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        purchased = BookOrder.objects.filter(buyer=request.user).select_related('book', 'seller', 'buyer')
+        sold = BookOrder.objects.filter(seller=request.user).select_related('book', 'seller', 'buyer')
+        return Response({
+            'purchased': BookOrderSerializer(purchased, many=True, context={'request': request}).data,
+            'sold': BookOrderSerializer(sold, many=True, context={'request': request}).data,
+        })
+
+
+class ManagerFinanceStatsAPIView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        tx_type = request.query_params.get('tx_type', '').strip()
+        search = request.query_params.get('search', '').strip()
+
+        all_txs = WalletTransaction.objects.select_related('wallet__user', 'related_book', 'created_by')
+        filtered_txs = all_txs
+        if tx_type:
+            filtered_txs = filtered_txs.filter(tx_type=tx_type)
+        if search:
+            filtered_txs = filtered_txs.filter(
+                Q(wallet__user__username__icontains=search) |
+                Q(reference_code__icontains=search) |
+                Q(description__icontains=search) |
+                Q(book_title_snapshot__icontains=search)
+            )
+
+        platform_revenue_total = quantize_money(
+            all_txs.aggregate(s=Sum('platform_commission')).get('s') or ZERO
+        )
+        owner_payouts_total = quantize_money(
+            all_txs.filter(tx_type='owner_earning').aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        purchase_volume_total = quantize_money(
+            all_txs.filter(tx_type='purchase').aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        borrow_fees_total = quantize_money(
+            all_txs.filter(tx_type__in=['borrow_fee', 'extend_fee']).aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        late_fees_collected_total = quantize_money(
+            all_txs.filter(tx_type__in=['late_fee', 'fine_settlement']).aggregate(s=Sum('amount')).get('s') or ZERO
+        )
+        unpaid_fines_total = quantize_money(
+            Borrowing.objects.filter(unpaid_fine__gt=ZERO).aggregate(s=Sum('unpaid_fine')).get('s') or ZERO
+        )
+        wallet_totals = Wallet.objects.aggregate(
+            total_balance=Sum('balance'),
+            total_locked=Sum('locked_balance'),
+        )
+        total_users_balance = quantize_money(wallet_totals.get('total_balance') or ZERO)
+        total_locked_deposits = quantize_money(wallet_totals.get('total_locked') or ZERO)
+
+        recent_orders = BookOrder.objects.select_related('book', 'buyer', 'seller')[:50]
+        fin_settings = get_financial_settings()
+
+        return Response({
+            'summary': {
+                'platform_revenue_total': f'{platform_revenue_total:.2f}',
+                'owner_payouts_total': f'{owner_payouts_total:.2f}',
+                'purchase_volume_total': f'{purchase_volume_total:.2f}',
+                'borrow_fees_total': f'{borrow_fees_total:.2f}',
+                'late_fees_collected_total': f'{late_fees_collected_total:.2f}',
+                'unpaid_fines_total': f'{unpaid_fines_total:.2f}',
+                'total_users_balance': f'{total_users_balance:.2f}',
+                'total_locked_deposits': f'{total_locked_deposits:.2f}',
+                'total_orders_count': BookOrder.objects.count(),
+            },
+            'settings': FinancialSettingsSerializer(fin_settings).data,
+            'transactions': WalletTransactionSerializer(filtered_txs[:100], many=True).data,
+            'orders': BookOrderSerializer(recent_orders, many=True, context={'request': request}).data,
+        })
+
+
+class SuperuserWalletAdjustAPIView(APIView):
+    permission_classes = [IsSuperUser]
+
+    def post(self, request):
+        user_identifier = request.data.get('user_identifier') or request.data.get('user_id')
+        action = request.data.get('action')
+        amount = request.data.get('amount')
+        reason = request.data.get('reason', '')
+
+        target_user = resolve_user_from_identifier(user_identifier)
+        if not target_user:
+            return Response(
+                {'error': 'کاربر مورد نظر یافت نشد.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            wallet, tx = adjust_wallet_by_admin(
+                target_user=target_user,
+                action=action,
+                raw_amount=amount,
+                reason=reason,
+                admin_user=request.user,
+            )
+        except WalletOperationError as exc:
+            payload = {'error': exc.message}
+            payload.update(exc.extra)
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+        if tx:
+            msg = f'تراکنش دستی برای کیف‌پول @{target_user.username} با موفقیت ثبت شد (موجودی جدید: ${wallet.balance:.2f}).'
+        else:
+            msg = f"وضعیت کیف‌پول @{target_user.username} به «{'مسدود' if wallet.is_frozen else 'فعال'}» تغییر یافت."
+
+        return Response({
+            'message': msg,
+            'wallet': WalletSerializer(wallet).data,
+            'transaction': WalletTransactionSerializer(tx).data if tx else None,
+        }, status=status.HTTP_200_OK)
+
+
+class SuperuserFinancialSettingsAPIView(APIView):
+    permission_classes = [IsSuperUser]
+
+    def get(self, request):
+        fin_settings = get_financial_settings()
+        return Response(FinancialSettingsSerializer(fin_settings).data)
+
+    def patch(self, request):
+        fin_settings = get_financial_settings()
+        serializer = FinancialSettingsSerializer(fin_settings, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({
+            'message': 'تعرفه‌ها و تنظیمات مالی فروشگاه با موفقیت بروزرسانی شد.',
+            'settings': serializer.data,
+        }, status=status.HTTP_200_OK)
 

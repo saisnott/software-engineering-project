@@ -3,7 +3,7 @@ import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useNotifications } from '../context/NotificationContext';
-import { formatPersianDate, toPersianDigits } from '../utils/formatters';
+import { formatPersianDate, formatPrice, toPersianDigits } from '../utils/formatters';
 import {
   BookOpen,
   PlusCircle,
@@ -22,7 +22,8 @@ import {
   CalendarPlus,
   MessageSquare,
   AlertCircle,
-  Sparkles
+  Sparkles,
+  Wallet
 } from 'lucide-react';
 
 export const Navbar = () => {
@@ -84,6 +85,8 @@ export const Navbar = () => {
       case 'role':
       case 'approval':
         return <ShieldCheck size={16} color="var(--accent2)" />;
+      case 'wallet':
+        return <Wallet size={16} color="var(--success)" />;
       default:
         return <BookOpen size={16} color="var(--accent2)" />;
     }
@@ -292,6 +295,22 @@ export const Navbar = () => {
 
               {isAuthenticated ? (
                 <div className="desktop-only" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Link
+                    to="/wallet"
+                    className="user-pill"
+                    title="کیف‌پول و تراکنش‌های مالی"
+                    style={{
+                      borderColor: user?.wallet_is_frozen ? 'rgba(220, 38, 38, 0.45)' : 'rgba(22, 163, 74, 0.35)',
+                      padding: '6px 12px',
+                      gap: '6px'
+                    }}
+                  >
+                    <Wallet size={15} color={user?.wallet_is_frozen ? 'var(--danger)' : 'var(--success)'} />
+                    <span dir="ltr" style={{ fontWeight: 700, color: user?.wallet_is_frozen ? 'var(--danger)' : 'var(--success)' }}>
+                      {formatPrice(user?.wallet_balance ?? 0)}
+                    </span>
+                  </Link>
+
                   <Link to="/dashboard" className="user-pill" title="داشبورد کاربری">
                     <span className="user-pill-avatar">
                       {user?.username?.[0]?.toUpperCase() || <User size={14} />}
@@ -394,6 +413,18 @@ export const Navbar = () => {
             <BookOpen size={18} />
             کاتالوگ کتاب‌ها
           </NavLink>
+
+          {isAuthenticated && (
+            <NavLink to="/wallet" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={{ justifyContent: 'space-between' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                <Wallet size={18} color="var(--success)" />
+                کیف‌پول و مالی
+              </span>
+              <span className="badge badge-available" dir="ltr" style={{ fontSize: '11.5px', padding: '2px 8px' }}>
+                {formatPrice(user?.wallet_balance ?? 0)}
+              </span>
+            </NavLink>
+          )}
 
           {isAuthenticated && (
             <NavLink to="/books/create" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>

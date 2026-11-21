@@ -14,6 +14,7 @@ import { BookCreatePage } from './pages/BookCreatePage';
 import { BookEditPage } from './pages/BookEditPage';
 import { UserDashboardPage } from './pages/UserDashboardPage';
 import { ManagerDashboardPage } from './pages/ManagerDashboardPage';
+import { WalletPage } from './pages/WalletPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { toPersianDigits } from './utils/formatters';
@@ -81,6 +82,14 @@ export function App() {
                   element={
                     <ProtectedRoute>
                       <UserDashboardPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/wallet"
+                  element={
+                    <ProtectedRoute>
+                      <WalletPage />
                     </ProtectedRoute>
                   }
                 />

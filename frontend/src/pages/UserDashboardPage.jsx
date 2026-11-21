@@ -17,16 +17,20 @@ import {
   Award,
   Star,
   MessageSquare,
-  Search
+  Search,
+  Wallet,
+  Lock,
+  ShoppingBag,
+  TrendingUp
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { BookCard } from '../components/BookCard';
-import { formatPersianDate, getRemainingDays, toPersianDigits } from '../utils/formatters';
+import { formatPersianDate, formatPrice, getRemainingDays, toPersianDigits } from '../utils/formatters';
 
 export const UserDashboardPage = () => {
-  const { user, updateProfile } = useAuth();
+  const { user, updateProfile, refreshProfile } = useAuth();
   const { showToast, refreshNotifications } = useNotifications();
   const profileDialogRef = useRef(null);
   const profileDialogTitleId = useId();
@@ -106,8 +110,7 @@ export const UserDashboardPage = () => {
       const res = await api.post(`/api/borrowings/${borrowingId}/return/`);
       setMessage({ type: 'success', text: res.data.message });
       showToast(res.data.message, 'success');
-      await fetchDashboard();
-      await refreshNotifications();
+      await Promise.all([fetchDashboard(), refreshProfile(), refreshNotifications()]);
     } catch (err) {
       const errMsg = err.response?.data?.error || 'خطا در بازگرداندن کتاب.';
       setMessage({ type: 'danger', text: errMsg });
@@ -124,8 +127,7 @@ export const UserDashboardPage = () => {
       const res = await api.post(`/api/borrowings/${borrowingId}/extend/`);
       setMessage({ type: 'success', text: res.data.message });
       showToast(res.data.message, 'success');
-      await fetchDashboard();
-      await refreshNotifications();
+      await Promise.all([fetchDashboard(), refreshProfile(), refreshNotifications()]);
     } catch (err) {
       const errMsg = err.response?.data?.error || 'خطا در تمدید مهلت امانت.';
       setMessage({ type: 'danger', text: errMsg });
@@ -213,6 +215,8 @@ export const UserDashboardPage = () => {
     wishlist = [],
     waitlist = [],
     submitted_books = [],
+    purchased_orders = [],
+    wallet_summary = null,
     reading_stats = {},
     activity_timeline = []
   } = dashboardData || {};
@@ -431,6 +435,68 @@ export const UserDashboardPage = () => {
         </div>
       )}
 
+      {/* Wallet Quick Summary Banner */}
+      {wallet_summary && (
+        <div
+          className="card"
+          style={{
+            padding: '20px 24px',
+            marginBottom: '28px',
+            borderColor: 'rgba(22, 163, 74, 0.38)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '16px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'var(--success-bg)', color: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Wallet size={22} />
+              </div>
+              <div>
+                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>موجودی قابل استفاده کیف‌پول</div>
+                <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--success)' }} dir="ltr">
+                  {formatPrice(wallet_summary.balance)}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Lock size={18} color="var(--accent2)" />
+              <div>
+                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>ودیعه بلوکه‌شده</div>
+                <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--accent2)' }} dir="ltr">
+                  {formatPrice(wallet_summary.locked_balance)}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <TrendingUp size={18} color="var(--success)" />
+              <div>
+                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>درآمد از کتاب‌های من</div>
+                <div style={{ fontSize: '17px', fontWeight: 800 }} dir="ltr">
+                  {formatPrice(wallet_summary.owner_earnings_total ?? 0)}
+                </div>
+              </div>
+            </div>
+
+            {parseFloat(wallet_summary.unpaid_fines_total || 0) > 0 && (
+              <span className="badge badge-borrowed" style={{ fontSize: '12.5px', padding: '6px 12px' }}>
+                جریمه تسویه‌نشده: {formatPrice(wallet_summary.unpaid_fines_total)}
+              </span>
+            )}
+          </div>
+
+          <Link to="/wallet" className="btn-primary" style={{ fontSize: '13.5px', padding: '9px 18px' }}>
+            <Wallet size={16} />
+            مدیریت و شارژ کیف‌پول
+          </Link>
+        </div>
+      )}
+
       {/* Reading Summary Stats Cards */}
       <div
         style={{
@@ -564,13 +630,18 @@ export const UserDashboardPage = () => {
                           <span>شناسه کتاب: <strong dir="ltr" style={{ color: 'var(--text)' }}>#{item.copy_id}</strong></span>
                         )}
                         <span>تاریخ امانت: {formatPersianDate(item.borrow_date)}</span>
+                        {parseFloat(item.deposit_locked || 0) > 0 && (
+                          <span style={{ color: 'var(--accent2)' }}>
+                            ودیعه بلوکه‌شده: <strong dir="ltr">{formatPrice(item.deposit_locked)}</strong> (آزادسازی پس از تحویل)
+                          </span>
+                        )}
                         <span style={{ color: isOverdue ? 'var(--danger)' : 'var(--accent2)', fontWeight: 700 }}>
                           موعد بازگشت: {formatPersianDate(item.due_date)}
                           {remainingDays !== null && (
                             <span>
                               {' '}
                               ({isOverdue
-                                ? `${toPersianDigits(Math.abs(remainingDays))} روز تأخیر`
+                                ? `${toPersianDigits(Math.abs(remainingDays))} روز تأخیر — جریمه تخمینی: ${formatPrice(Math.abs(remainingDays) * parseFloat(wallet_summary?.daily_late_fee || 1))}`
                                 : `${toPersianDigits(remainingDays)} روز باقی‌مانده`})
                             </span>
                           )}
@@ -590,7 +661,9 @@ export const UserDashboardPage = () => {
                         title="تمدید مهلت امانت به مدت ۷ روز"
                       >
                         <CalendarPlus size={15} />
-                        {extendingId === item.id ? 'در حال تمدید...' : 'تمدید (+۷ روز)'}
+                        {extendingId === item.id
+                          ? 'در حال تمدید...'
+                          : `تمدید (+۷ روز${parseFloat(wallet_summary?.extend_fee_amount || 0) > 0 ? ` — ${formatPrice(wallet_summary.extend_fee_amount)}` : ''})`}
                       </button>
                     )}
 
@@ -611,6 +684,50 @@ export const UserDashboardPage = () => {
           </div>
         )}
       </div>
+
+      {/* 1.4. Purchased Books (Orders) */}
+      {purchased_orders.length > 0 && (
+        <div style={{ marginBottom: '48px' }}>
+          <h2 style={{ fontSize: '21px', fontWeight: 800, marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ShoppingBag size={22} color="var(--success)" />
+            کتاب‌های خریداری‌شده من ({toPersianDigits(purchased_orders.length)})
+          </h2>
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="table-wrapper" tabIndex={0} role="region" aria-label="کتاب‌های خریداری‌شده من">
+              <table>
+                <thead>
+                  <tr>
+                    <th>کد سفارش</th>
+                    <th>عنوان کتاب</th>
+                    <th>شناسه جلد</th>
+                    <th>مبلغ پرداختی</th>
+                    <th>تاریخ خرید</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {purchased_orders.map((ord) => (
+                    <tr key={ord.id}>
+                      <td><span className="code-mono-badge">{ord.order_code}</span></td>
+                      <td>
+                        {ord.book ? (
+                          <Link to={`/books/${ord.book}`} style={{ fontWeight: 700, color: 'var(--text)' }}>
+                            {ord.book_title}
+                          </Link>
+                        ) : (
+                          <strong>{ord.book_title}</strong>
+                        )}
+                      </td>
+                      <td dir="ltr">{ord.copy_id ? `#${ord.copy_id}` : '—'}</td>
+                      <td dir="ltr" style={{ fontWeight: 700, color: 'var(--accent2)' }}>{formatPrice(ord.total_price)}</td>
+                      <td>{formatPersianDate(ord.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 1.5. User's Submitted Books & Approval Status */}
       {submitted_books.length > 0 && (
