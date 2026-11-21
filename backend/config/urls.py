@@ -3,11 +3,13 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from books.api_views import APIRootView
 from pages.views import HomePageView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     # REST API endpoints
+    path('api', APIRootView.as_view(), name='api_root_no_slash'),
     path('api/auth/', include('accounts.api_urls')),
     path('api/', include('books.api_urls')),
     # Legacy Django templates routes

@@ -217,6 +217,48 @@ class IsStaffOrReadOnly(permissions.BasePermission):
         return bool(request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser))
 
 
+class APIRootView(APIView):
+    """Browsable API index at /api/ listing all main endpoints."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        def uri(subpath):
+            return request.build_absolute_uri(f'/api/{subpath}')
+
+        return Response({
+            'books': {
+                'categories': uri('categories/'),
+                'books_list_create': uri('books/'),
+                'borrowing_history': uri('borrowings/history/'),
+                'user_dashboard': uri('dashboard/'),
+                'notifications': uri('notifications/'),
+                'notifications_mark_read': uri('notifications/mark-read/'),
+            },
+            'wallet_and_orders': {
+                'wallet_detail': uri('wallet/'),
+                'wallet_topup': uri('wallet/topup/'),
+                'wallet_pay_fines': uri('wallet/pay-fines/'),
+                'orders': uri('orders/'),
+            },
+            'auth': {
+                'login': uri('auth/login/'),
+                'register': uri('auth/register/'),
+                'refresh_token': uri('auth/refresh/'),
+                'profile': uri('auth/profile/'),
+                'change_password': uri('auth/change-password/'),
+                'admin_users': uri('auth/users/'),
+            },
+            'manager': {
+                'library_stats': uri('manager/stats/'),
+                'finance_stats': uri('manager/finance/'),
+                'wallet_adjust': uri('manager/wallet/adjust/'),
+                'finance_settings': uri('manager/finance/settings/'),
+                'quick_borrow': uri('manager/quick-borrow/'),
+                'send_notification': uri('manager/notifications/send/'),
+            },
+        })
+
+
 class CategoryListCreateAPIView(generics.ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer

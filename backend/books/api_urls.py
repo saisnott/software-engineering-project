@@ -1,5 +1,6 @@
 from django.urls import path
 from .api_views import (
+    APIRootView,
     BookApprovalReviewAPIView,
     BookCopyCreateAPIView,
     BookCopyDeleteAPIView,
@@ -33,6 +34,7 @@ from .api_views import (
 app_name = 'books_api'
 
 urlpatterns = [
+    path('', APIRootView.as_view(), name='api_root'),
     path('categories/', CategoryListCreateAPIView.as_view(), name='api_category_list'),
     path('categories/<int:pk>/', CategoryDetailAPIView.as_view(), name='api_category_detail'),
     path('books/', BookListCreateAPIView.as_view(), name='api_book_list_create'),
