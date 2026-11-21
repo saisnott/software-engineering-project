@@ -1,4 +1,8 @@
 :root {
+  /* Progressive gradient interpolation color space tokens */
+  --in-oklab: ;
+  --in-oklch: ;
+
   /* Light Mode Raw Tokens (Warm Alabaster & Editorial Paper) */
   --ink-light: #f7f4ed;
   --surface-light: #ffffff;
@@ -15,6 +19,19 @@
   --border-strong-light: rgba(26, 22, 37, 0.18);
   --shadow-light: 0 12px 32px rgba(26, 22, 37, 0.08);
   --shadow-lg-light: 0 20px 48px rgba(26, 22, 37, 0.13);
+  --liquid-glass-bg-start-light: rgba(255, 255, 255, 0.72);
+  --liquid-glass-bg-end-light: rgba(249, 245, 238, 0.54);
+  --liquid-glass-header-start-light: rgba(255, 255, 255, 0.5);
+  --liquid-glass-header-end-light: rgba(255, 255, 255, 0.14);
+  --liquid-glass-border-light: rgba(255, 255, 255, 0.76);
+  --liquid-glass-highlight-light: rgba(255, 255, 255, 0.9);
+  --liquid-glass-refract-light: rgba(255, 255, 255, 0.42);
+  --liquid-glass-sheen-start-light: rgba(255, 255, 255, 0.42);
+  --liquid-glass-sheen-end-light: rgba(200, 122, 18, 0.06);
+  --liquid-glass-item-hover-light: rgba(255, 255, 255, 0.62);
+  --liquid-glass-divider-light: rgba(26, 22, 37, 0.11);
+  --liquid-glass-ring-light: rgba(26, 22, 37, 0.09);
+  --liquid-glass-drop-light: 0 18px 42px -8px rgba(26, 22, 37, 0.18), 0 6px 16px -4px rgba(26, 22, 37, 0.08);
 
   /* Dark Mode Raw Tokens (Deep Obsidian & Gold) */
   --ink-dark: #0f0d16;
@@ -32,6 +49,19 @@
   --border-strong-dark: rgba(255, 255, 255, 0.16);
   --shadow-dark: 0 14px 36px rgba(0, 0, 0, 0.42);
   --shadow-lg-dark: 0 24px 56px rgba(0, 0, 0, 0.6);
+  --liquid-glass-bg-start-dark: rgba(36, 31, 54, 0.68);
+  --liquid-glass-bg-end-dark: rgba(18, 15, 28, 0.56);
+  --liquid-glass-header-start-dark: rgba(255, 255, 255, 0.1);
+  --liquid-glass-header-end-dark: rgba(255, 255, 255, 0.02);
+  --liquid-glass-border-dark: rgba(255, 255, 255, 0.18);
+  --liquid-glass-highlight-dark: rgba(255, 255, 255, 0.3);
+  --liquid-glass-refract-dark: rgba(240, 178, 74, 0.11);
+  --liquid-glass-sheen-start-dark: rgba(255, 255, 255, 0.13);
+  --liquid-glass-sheen-end-dark: rgba(240, 178, 74, 0.07);
+  --liquid-glass-item-hover-dark: rgba(255, 255, 255, 0.11);
+  --liquid-glass-divider-dark: rgba(255, 255, 255, 0.12);
+  --liquid-glass-ring-dark: rgba(0, 0, 0, 0.45);
+  --liquid-glass-drop-dark: 0 24px 54px -8px rgba(0, 0, 0, 0.62), 0 8px 20px -4px rgba(0, 0, 0, 0.38);
 
   /* Default Fallback (Light) */
   --ink: var(--ink-light);
@@ -49,6 +79,19 @@
   --border-strong: var(--border-strong-light);
   --shadow: var(--shadow-light);
   --shadow-lg: var(--shadow-lg-light);
+  --liquid-glass-bg-start: var(--liquid-glass-bg-start-light);
+  --liquid-glass-bg-end: var(--liquid-glass-bg-end-light);
+  --liquid-glass-header-start: var(--liquid-glass-header-start-light);
+  --liquid-glass-header-end: var(--liquid-glass-header-end-light);
+  --liquid-glass-border: var(--liquid-glass-border-light);
+  --liquid-glass-highlight: var(--liquid-glass-highlight-light);
+  --liquid-glass-refract: var(--liquid-glass-refract-light);
+  --liquid-glass-sheen-start: var(--liquid-glass-sheen-start-light);
+  --liquid-glass-sheen-end: var(--liquid-glass-sheen-end-light);
+  --liquid-glass-item-hover: var(--liquid-glass-item-hover-light);
+  --liquid-glass-divider: var(--liquid-glass-divider-light);
+  --liquid-glass-ring: var(--liquid-glass-ring-light);
+  --liquid-glass-drop: var(--liquid-glass-drop-light);
 
   /* Status Colors */
   --success: #16a34a;
@@ -91,6 +134,19 @@
     --border-strong: var(--border-strong-dark);
     --shadow: var(--shadow-dark);
     --shadow-lg: var(--shadow-lg-dark);
+    --liquid-glass-bg-start: var(--liquid-glass-bg-start-dark);
+    --liquid-glass-bg-end: var(--liquid-glass-bg-end-dark);
+    --liquid-glass-header-start: var(--liquid-glass-header-start-dark);
+    --liquid-glass-header-end: var(--liquid-glass-header-end-dark);
+    --liquid-glass-border: var(--liquid-glass-border-dark);
+    --liquid-glass-highlight: var(--liquid-glass-highlight-dark);
+    --liquid-glass-refract: var(--liquid-glass-refract-dark);
+    --liquid-glass-sheen-start: var(--liquid-glass-sheen-start-dark);
+    --liquid-glass-sheen-end: var(--liquid-glass-sheen-end-dark);
+    --liquid-glass-item-hover: var(--liquid-glass-item-hover-dark);
+    --liquid-glass-divider: var(--liquid-glass-divider-dark);
+    --liquid-glass-ring: var(--liquid-glass-ring-dark);
+    --liquid-glass-drop: var(--liquid-glass-drop-dark);
     --success: #22c55e;
     --danger: #ef4444;
     --warning: #f59e0b;
@@ -113,12 +169,31 @@
     --border-strong: light-dark(var(--border-strong-light), var(--border-strong-dark));
     --shadow: light-dark(var(--shadow-light), var(--shadow-dark));
     --shadow-lg: light-dark(var(--shadow-lg-light), var(--shadow-lg-dark));
+    --liquid-glass-bg-start: light-dark(var(--liquid-glass-bg-start-light), var(--liquid-glass-bg-start-dark));
+    --liquid-glass-bg-end: light-dark(var(--liquid-glass-bg-end-light), var(--liquid-glass-bg-end-dark));
+    --liquid-glass-header-start: light-dark(var(--liquid-glass-header-start-light), var(--liquid-glass-header-start-dark));
+    --liquid-glass-header-end: light-dark(var(--liquid-glass-header-end-light), var(--liquid-glass-header-end-dark));
+    --liquid-glass-border: light-dark(var(--liquid-glass-border-light), var(--liquid-glass-border-dark));
+    --liquid-glass-highlight: light-dark(var(--liquid-glass-highlight-light), var(--liquid-glass-highlight-dark));
+    --liquid-glass-refract: light-dark(var(--liquid-glass-refract-light), var(--liquid-glass-refract-dark));
+    --liquid-glass-sheen-start: light-dark(var(--liquid-glass-sheen-start-light), var(--liquid-glass-sheen-start-dark));
+    --liquid-glass-sheen-end: light-dark(var(--liquid-glass-sheen-end-light), var(--liquid-glass-sheen-end-dark));
+    --liquid-glass-item-hover: light-dark(var(--liquid-glass-item-hover-light), var(--liquid-glass-item-hover-dark));
+    --liquid-glass-divider: light-dark(var(--liquid-glass-divider-light), var(--liquid-glass-divider-dark));
+    --liquid-glass-ring: light-dark(var(--liquid-glass-ring-light), var(--liquid-glass-ring-dark));
     --success: light-dark(#15803d, #2ecc71);
     --danger: light-dark(#dc2626, #f87171);
     --warning: light-dark(#d97706, #fbbf24);
   }
 
   accent-color: var(--accent);
+}
+
+@supports (background: linear-gradient(in oklab, white, black)) {
+  :root {
+    --in-oklab: in oklab;
+    --in-oklch: in oklch;
+  }
 }
 
 /* Explicit fallback override when light-dark() is unsupported */
@@ -138,6 +213,19 @@
   --border-strong: var(--border-strong-dark);
   --shadow: var(--shadow-dark);
   --shadow-lg: var(--shadow-lg-dark);
+  --liquid-glass-bg-start: var(--liquid-glass-bg-start-dark);
+  --liquid-glass-bg-end: var(--liquid-glass-bg-end-dark);
+  --liquid-glass-header-start: var(--liquid-glass-header-start-dark);
+  --liquid-glass-header-end: var(--liquid-glass-header-end-dark);
+  --liquid-glass-border: var(--liquid-glass-border-dark);
+  --liquid-glass-highlight: var(--liquid-glass-highlight-dark);
+  --liquid-glass-refract: var(--liquid-glass-refract-dark);
+  --liquid-glass-sheen-start: var(--liquid-glass-sheen-start-dark);
+  --liquid-glass-sheen-end: var(--liquid-glass-sheen-end-dark);
+  --liquid-glass-item-hover: var(--liquid-glass-item-hover-dark);
+  --liquid-glass-divider: var(--liquid-glass-divider-dark);
+  --liquid-glass-ring: var(--liquid-glass-ring-dark);
+  --liquid-glass-drop: var(--liquid-glass-drop-dark);
 }
 
 :root[data-theme="light"] {
@@ -156,6 +244,19 @@
   --border-strong: var(--border-strong-light);
   --shadow: var(--shadow-light);
   --shadow-lg: var(--shadow-lg-light);
+  --liquid-glass-bg-start: var(--liquid-glass-bg-start-light);
+  --liquid-glass-bg-end: var(--liquid-glass-bg-end-light);
+  --liquid-glass-header-start: var(--liquid-glass-header-start-light);
+  --liquid-glass-header-end: var(--liquid-glass-header-end-light);
+  --liquid-glass-border: var(--liquid-glass-border-light);
+  --liquid-glass-highlight: var(--liquid-glass-highlight-light);
+  --liquid-glass-refract: var(--liquid-glass-refract-light);
+  --liquid-glass-sheen-start: var(--liquid-glass-sheen-start-light);
+  --liquid-glass-sheen-end: var(--liquid-glass-sheen-end-light);
+  --liquid-glass-item-hover: var(--liquid-glass-item-hover-light);
+  --liquid-glass-divider: var(--liquid-glass-divider-light);
+  --liquid-glass-ring: var(--liquid-glass-ring-light);
+  --liquid-glass-drop: var(--liquid-glass-drop-light);
 }
 
 *,
@@ -1619,6 +1720,288 @@ dialog::backdrop {
 
 .notif-dropdown-item.unread {
   background: var(--accent-soft);
+}
+
+/* ── User Profile Dropdown Menu (Liquid Glass Popover + Anchor Positioning) ── */
+.user-menu-trigger {
+  padding-inline-end: 10px;
+}
+
+.user-menu-trigger:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
+}
+
+.user-menu-trigger[aria-expanded="true"] {
+  border-color: var(--liquid-glass-border);
+  color: var(--accent2);
+  background: linear-gradient(
+    145deg var(--in-oklab),
+    var(--liquid-glass-bg-start),
+    var(--liquid-glass-bg-end)
+  );
+  backdrop-filter: blur(14px) saturate(170%);
+  -webkit-backdrop-filter: blur(14px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0.5px var(--liquid-glass-highlight),
+    0 0 0 1px var(--accent2),
+    0 6px 18px -4px rgba(200, 122, 18, 0.25);
+}
+
+.user-menu-chevron {
+  color: var(--muted);
+  transition: transform 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.user-menu-trigger[aria-expanded="true"] .user-menu-chevron {
+  transform: rotate(180deg);
+  color: var(--accent2);
+}
+
+.user-menu-popover {
+  width: min(284px, calc(100vw - 24px));
+  padding: 0;
+  color: var(--text);
+  background: linear-gradient(
+    155deg var(--in-oklab),
+    var(--liquid-glass-bg-start),
+    var(--liquid-glass-bg-end)
+  );
+  backdrop-filter: blur(26px) saturate(195%) brightness(1.04);
+  -webkit-backdrop-filter: blur(26px) saturate(195%) brightness(1.04);
+  border: 1px solid var(--liquid-glass-border);
+  border-radius: 20px;
+  box-shadow:
+    inset 0 1px 0.5px var(--liquid-glass-highlight),
+    inset 0 -1px 1px var(--liquid-glass-refract),
+    inset 1px 0 0.5px var(--liquid-glass-refract),
+    0 0 0 1px var(--liquid-glass-ring),
+    var(--liquid-glass-drop);
+  overflow: hidden;
+  isolation: isolate;
+  direction: rtl;
+  text-align: right;
+}
+
+.user-menu-popover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg var(--in-oklab),
+    var(--liquid-glass-sheen-start) 0%,
+    transparent 44%,
+    var(--liquid-glass-sheen-end) 100%
+  );
+  z-index: 0;
+}
+
+.user-menu-popover:not([popover]) {
+  display: none;
+}
+
+.user-menu-popover:not([popover]).\:popover-open {
+  display: block;
+  z-index: 320;
+}
+
+@supports (position-area: block-end) {
+  .user-menu-popover {
+    position-area: block-end span-inline-start;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    inset: auto;
+    margin: 10px 0 0 0;
+  }
+}
+
+@supports not (position-area: block-end) {
+  .user-menu-popover {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .user-menu-popover {
+    background: var(--surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-color: var(--border-strong);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .user-menu-popover {
+    opacity: 0;
+    translate: 0 -0.25rem;
+    transition: opacity, translate, display, overlay;
+    transition-duration: 0.14s;
+    transition-behavior: allow-discrete;
+  }
+
+  .user-menu-popover:is(:popover-open, .\:popover-open) {
+    opacity: 1;
+    translate: 0 0;
+    transition-duration: 0.12s;
+
+    @starting-style {
+      opacity: 0;
+      translate: 0 -0.25rem;
+    }
+  }
+}
+
+.user-menu-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 15px;
+  background: linear-gradient(
+    to bottom var(--in-oklab),
+    var(--liquid-glass-header-start),
+    var(--liquid-glass-header-end)
+  );
+  border-bottom: 1px solid var(--liquid-glass-divider);
+}
+
+.user-menu-avatar-lg {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg var(--in-oklab), var(--accent), var(--accent2));
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.45),
+    0 6px 14px rgba(192, 57, 43, 0.3);
+}
+
+.user-menu-list {
+  position: relative;
+  z-index: 1;
+  --menu-icon-size: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  padding: 7px;
+  gap: 3px;
+}
+
+.user-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: right;
+  text-decoration: none;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.user-menu-item:hover,
+.user-menu-item:focus-visible {
+  background: var(--liquid-glass-item-hover);
+  border-color: var(--liquid-glass-refract);
+  color: var(--accent2);
+  box-shadow:
+    inset 0 1px 0.5px var(--liquid-glass-highlight),
+    0 2px 8px -2px rgba(0, 0, 0, 0.08);
+  outline: none;
+}
+
+.user-menu-item:focus-visible {
+  box-shadow:
+    inset 0 0 0 1.5px var(--accent2),
+    0 2px 8px -2px rgba(0, 0, 0, 0.08);
+}
+
+.user-menu-icon {
+  inline-size: var(--menu-icon-size);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+
+.user-menu-item:hover .user-menu-icon,
+.user-menu-item:focus-visible .user-menu-icon {
+  color: var(--accent2);
+}
+
+.user-menu-item-alert {
+  background: color-mix(in oklab, var(--danger) 12%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 24%, transparent);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.user-menu-item-alert .user-menu-icon {
+  color: var(--danger);
+}
+
+.user-menu-item-alert:hover,
+.user-menu-item-alert:focus-visible {
+  background: color-mix(in oklab, var(--danger) 20%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 34%, transparent);
+  color: var(--danger);
+}
+
+.user-menu-item-alert:hover .user-menu-icon,
+.user-menu-item-alert:focus-visible .user-menu-icon {
+  color: var(--danger);
+}
+
+.user-menu-item-danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.user-menu-item-danger .user-menu-icon {
+  color: var(--danger);
+}
+
+.user-menu-item-danger:hover,
+.user-menu-item-danger:focus-visible {
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 28%, transparent);
+  color: var(--danger);
+  box-shadow: inset 0 1px 0.5px rgba(255, 255, 255, 0.25);
+}
+
+.user-menu-item-danger:hover .user-menu-icon,
+.user-menu-item-danger:focus-visible .user-menu-icon {
+  color: var(--danger);
+}
+
+.user-menu-divider {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(
+    to left var(--in-oklab),
+    transparent,
+    var(--liquid-glass-divider) 18%,
+    var(--liquid-glass-divider) 82%,
+    transparent
+  );
+  margin: 5px 6px;
 }
 
 /* ── Tables (RTL & Responsive Sticky Headers) ── */

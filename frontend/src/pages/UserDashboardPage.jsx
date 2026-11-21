@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   BookOpen,
   RotateCcw,
@@ -32,6 +32,8 @@ import { formatPersianDate, formatPrice, getRemainingDays, toPersianDigits } fro
 export const UserDashboardPage = () => {
   const { user, updateProfile, refreshProfile } = useAuth();
   const { showToast, refreshNotifications } = useNotifications();
+  const location = useLocation();
+  const navigate = useNavigate();
   const profileDialogRef = useRef(null);
   const profileDialogTitleId = useId();
 
@@ -78,6 +80,27 @@ export const UserDashboardPage = () => {
       setEditAge(user.age ?? '');
     }
   }, [user]);
+
+  useEffect(() => {
+    if (loading) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get('editProfile') === '1') {
+      const dialog = profileDialogRef.current;
+      if (dialog && !dialog.open) {
+        setModalAlert(null);
+        dialog.showModal();
+      }
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+    if (location.hash) {
+      const targetId = location.hash.slice(1);
+      const targetEl = document.getElementById(targetId);
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  }, [loading, location.hash, location.search, navigate]);
 
   // Fallback for browsers without native <dialog closedby="any"> support
   useEffect(() => {
@@ -561,7 +584,7 @@ export const UserDashboardPage = () => {
       </div>
 
       {/* 1. Currently Borrowed Books */}
-      <div style={{ marginBottom: '48px' }}>
+      <div id="borrowings" style={{ marginBottom: '48px', scrollMarginTop: '92px' }}>
         <h2 style={{ fontSize: '21px', fontWeight: 800, marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <BookOpen size={22} color="var(--accent2)" />
           کتاب‌های در دست امانت من ({toPersianDigits(current_borrowings.length)})
@@ -1023,7 +1046,7 @@ export const UserDashboardPage = () => {
       </div>
 
       {/* 4. Wishlist */}
-      <div>
+      <div id="wishlist" style={{ scrollMarginTop: '92px' }}>
         <h2 style={{ fontSize: '21px', fontWeight: 800, marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Heart size={22} color="var(--accent)" />
           لیست علاقه‌مندی‌های من ({toPersianDigits(wishlist.length)})
