@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useId, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import gsap from 'gsap';
+import { useGSAP } from '@gsap/react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -62,6 +65,19 @@ export const Navbar = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  const headerRef = useRef(null);
+  const navLinksRef = useRef(null);
+  const navIndicatorRef = useRef(null);
+  const themeIconRef = useRef(null);
+  const bellIconRef = useRef(null);
+  const notifPanelRef = useRef(null);
+  const walletPillRef = useRef(null);
+  const mobileDrawerRef = useRef(null);
+  const prevIsDarkRef = useRef(isDark);
+  const prevUnreadCountRef = useRef(unreadCount);
+  const prevWalletBalanceRef = useRef(user?.wallet_balance);
 
   const notifWrapRef = useRef(null);
   const userMenuTriggerRef = useRef(null);
@@ -149,6 +165,245 @@ export const Navbar = () => {
     popoverEl.style.left = `${Math.round(left)}px`;
   }, []);
 
+  // Track scroll state for Floating Liquid Glass Header (Style A)
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 24);
+    };
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Subtle bell swing helper
+  const ringBell = useCallback(() => {
+    const el = bellIconRef.current;
+    if (!el || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    gsap.killTweensOf(el);
+    gsap.fromTo(
+      el,
+      { rotate: 0, transformOrigin: '50% 15%' },
+      {
+        keyframes: [
+          { rotate: 14, duration: 0.09 },
+          { rotate: -12, duration: 0.1 },
+          { rotate: 8, duration: 0.1 },
+          { rotate: -5, duration: 0.09 },
+          { rotate: 0, duration: 0.12 }
+        ],
+        ease: 'power2.inOut',
+        clearProps: 'transform'
+      }
+    );
+  }, []);
+
+  // Move sliding nav indicator under target link (or active link)
+  const moveNavIndicatorTo = useCallback((targetEl, immediate = false) => {
+    const indicator = navIndicatorRef.current;
+    if (!indicator) return;
+    if (!targetEl) {
+      gsap.to(indicator, { opacity: 0, duration: immediate ? 0 : 0.2, overwrite: 'auto' });
+      return;
+    }
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const props = {
+      x: targetEl.offsetLeft,
+      width: targetEl.offsetWidth,
+      opacity: 1
+    };
+    if (immediate || reduced) {
+      gsap.set(indicator, props);
+    } else {
+      gsap.to(indicator, { ...props, duration: 0.34, ease: 'power3.out', overwrite: 'auto' });
+    }
+  }, []);
+
+  // 1. Initial subtle Navbar entrance choreography
+  useGSAP(
+    () => {
+      const mm = gsap.matchMedia();
+      mm.add('(prefers-reduced-motion: no-preference)', () => {
+        gsap.from('.nav-enter-item', {
+          y: -8,
+          opacity: 0,
+          duration: 0.42,
+          stagger: 0.045,
+          ease: 'power3.out',
+          clearProps: 'transform,opacity'
+        });
+      });
+    },
+    { scope: headerRef }
+  );
+
+  // 2. Sync sliding active indicator on route / auth / resize / font load
+  useGSAP(
+    () => {
+      const syncActive = (immediate = false) => {
+        const activeLink = navLinksRef.current?.querySelector('.nav-link.active');
+        moveNavIndicatorTo(activeLink, immediate);
+      };
+
+      syncActive(false);
+
+      const abortController = new AbortController();
+      document.fonts?.ready?.then(() => {
+        if (!abortController.signal.aborted) syncActive(true);
+      });
+
+      const handleResize = () => syncActive(true);
+      window.addEventListener('resize', handleResize);
+      return () => {
+        abortController.abort();
+        window.removeEventListener('resize', handleResize);
+      };
+    },
+    { scope: headerRef, dependencies: [location.pathname, isAuthenticated, isScrolled] }
+  );
+
+  // 3. Theme Toggle Sun <-> Moon smooth rotate/scale animation
+  useGSAP(
+    () => {
+      if (prevIsDarkRef.current === isDark) return;
+      prevIsDarkRef.current = isDark;
+      const el = themeIconRef.current;
+      if (!el || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+      gsap.fromTo(
+        el,
+        { rotate: -95, scale: 0.6, opacity: 0 },
+        { rotate: 0, scale: 1, opacity: 1, duration: 0.38, ease: 'back.out(1.7)', clearProps: 'transform' }
+      );
+    },
+    { scope: headerRef, dependencies: [isDark] }
+  );
+
+  // 4. Bell ring when new unread notifications arrive
+  useEffect(() => {
+    if (unreadCount > prevUnreadCountRef.current) {
+      ringBell();
+    }
+    prevUnreadCountRef.current = unreadCount;
+  }, [unreadCount, ringBell]);
+
+  // Position portaled notification panel cleanly below bell button (escapes header backdrop-filter root)
+  const positionNotifPanel = useCallback(() => {
+    const panel = notifPanelRef.current;
+    const triggerWrap = notifWrapRef.current;
+    if (!panel || !triggerWrap) return;
+
+    if (window.innerWidth <= 860) {
+      panel.style.top = '';
+      panel.style.left = '';
+      return;
+    }
+
+    const rect = triggerWrap.getBoundingClientRect();
+    const panelWidth = Math.min(370, window.innerWidth - 24);
+    const top = Math.round(rect.bottom + 12);
+    const left = Math.max(12, Math.min(Math.round(rect.left), window.innerWidth - panelWidth - 12));
+    panel.style.top = `${top}px`;
+    panel.style.left = `${left}px`;
+  }, []);
+
+  useEffect(() => {
+    if (!notifOpen) return;
+    positionNotifPanel();
+    // Re-sync after the 380ms floating header CSS transition settles
+    const settleTimer = setTimeout(positionNotifPanel, 390);
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setNotifOpen(false);
+      }
+    };
+    window.addEventListener('resize', positionNotifPanel);
+    window.addEventListener('scroll', positionNotifPanel, true);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(settleTimer);
+      window.removeEventListener('resize', positionNotifPanel);
+      window.removeEventListener('scroll', positionNotifPanel, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [notifOpen, isScrolled, positionNotifPanel]);
+
+  // 5. Animate Liquid Glass Notification Dropdown & stagger items on open
+  useGSAP(
+    () => {
+      if (!notifOpen || !notifPanelRef.current) return;
+      positionNotifPanel();
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+      const panel = notifPanelRef.current;
+      gsap.fromTo(
+        panel,
+        { y: -10, scale: 0.97, opacity: 0 },
+        { y: 0, scale: 1, opacity: 1, duration: 0.24, ease: 'power3.out', clearProps: 'transform' }
+      );
+      const items = panel.querySelectorAll('.notif-dropdown-item');
+      if (items.length > 0) {
+        gsap.from(items, {
+          y: 8,
+          opacity: 0,
+          duration: 0.26,
+          stagger: 0.03,
+          delay: 0.04,
+          ease: 'power2.out',
+          clearProps: 'transform,opacity'
+        });
+      }
+    },
+    { dependencies: [notifOpen] }
+  );
+
+  // 6. Wallet balance pulse when balance changes
+  useGSAP(
+    () => {
+      const currentBal = user?.wallet_balance;
+      if (
+        prevWalletBalanceRef.current !== undefined &&
+        currentBal !== undefined &&
+        prevWalletBalanceRef.current !== currentBal
+      ) {
+        const pill = walletPillRef.current;
+        if (pill && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+          gsap.fromTo(
+            pill,
+            { scale: 1 },
+            {
+              keyframes: [
+                { scale: 1.09, boxShadow: '0 0 0 4px rgba(22, 163, 74, 0.28)', duration: 0.16, ease: 'power2.out' },
+                { scale: 1, boxShadow: '0 0 0 0px rgba(22, 163, 74, 0)', duration: 0.42, ease: 'elastic.out(1, 0.55)' }
+              ],
+              clearProps: 'transform,boxShadow'
+            }
+          );
+        }
+      }
+      prevWalletBalanceRef.current = currentBal;
+    },
+    { scope: headerRef, dependencies: [user?.wallet_balance] }
+  );
+
+  // 7. Mobile drawer links stagger on open
+  useGSAP(
+    () => {
+      if (!mobileMenuOpen || !mobileDrawerRef.current) return;
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+      const items = mobileDrawerRef.current.querySelectorAll('.mobile-drawer-links > *');
+      if (items.length > 0) {
+        gsap.from(items, {
+          x: 18,
+          opacity: 0,
+          duration: 0.3,
+          stagger: 0.04,
+          delay: 0.08,
+          ease: 'power3.out',
+          clearProps: 'transform,opacity'
+        });
+      }
+    },
+    { dependencies: [mobileMenuOpen] }
+  );
+
   // Close mobile drawer, notifications & user menu when route changes
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -162,7 +417,9 @@ export const Navbar = () => {
   // Close notification dropdown (and fallback user menu if Popover API unsupported) on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (notifWrapRef.current && !notifWrapRef.current.contains(event.target)) {
+      const clickedInsideBell = notifWrapRef.current?.contains(event.target);
+      const clickedInsidePanel = notifPanelRef.current?.contains(event.target);
+      if (!clickedInsideBell && !clickedInsidePanel) {
         setNotifOpen(false);
       }
       if (!supportsPopover() && userMenuOpen) {
@@ -429,213 +686,234 @@ export const Navbar = () => {
 
   return (
     <>
-      <header className="site-header">
-        <div className="container">
-          <div className="nav-inner">
-            {/* Right: Brand */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-              <Link to="/" className="brand">
-                <span className="brand-logo-box">
-                  <Library size={20} />
-                </span>
-                <div>
-                  <span>کتاب‌سرا</span>
-                  <span className="brand-subtitle">سامانه هوشمند کتابخانه</span>
-                </div>
-              </Link>
+      <header ref={headerRef} className={`site-header ${isScrolled ? 'is-scrolled' : ''}`}>
+        <div className="site-header-shell">
+          <div className="container">
+            <div className="nav-inner">
+              {/* Right: Brand */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                <Link to="/" className="brand nav-enter-item">
+                  <span className="brand-logo-box">
+                    <Library size={20} />
+                  </span>
+                  <div>
+                    <span>کتاب‌سرا</span>
+                    <span className="brand-subtitle">سامانه هوشمند کتابخانه</span>
+                  </div>
+                </Link>
 
-              {/* Desktop Navigation Links */}
-              <nav className="nav-links desktop-only">
-                <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                  <Home size={16} />
-                  صفحه اصلی
-                </NavLink>
+                {/* Desktop Navigation Links with GSAP Sliding Indicator */}
+                <nav
+                  ref={navLinksRef}
+                  className="nav-links nav-links-gsap desktop-only"
+                  onPointerLeave={() => {
+                    const activeLink = navLinksRef.current?.querySelector('.nav-link.active');
+                    moveNavIndicatorTo(activeLink, false);
+                  }}
+                >
+                  <span ref={navIndicatorRef} className="nav-links-indicator nav-enter-item" aria-hidden="true" />
 
-                <NavLink to="/books" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                  <BookOpen size={16} />
-                  کاتالوگ کتاب‌ها
-                </NavLink>
+                  <NavLink
+                    to="/"
+                    end
+                    className={({ isActive }) => `nav-link nav-link-gsap nav-enter-item ${isActive ? 'active' : ''}`}
+                    onPointerEnter={(e) => moveNavIndicatorTo(e.currentTarget, false)}
+                  >
+                    <Home size={16} />
+                    صفحه اصلی
+                  </NavLink>
+
+                  <NavLink
+                    to="/books"
+                    className={({ isActive }) => `nav-link nav-link-gsap nav-enter-item ${isActive ? 'active' : ''}`}
+                    onPointerEnter={(e) => moveNavIndicatorTo(e.currentTarget, false)}
+                  >
+                    <BookOpen size={16} />
+                    کاتالوگ کتاب‌ها
+                  </NavLink>
+
+                  {isAuthenticated && (
+                    <NavLink
+                      to="/books/create"
+                      className={({ isActive }) => `nav-link nav-link-gsap nav-enter-item ${isActive ? 'active' : ''}`}
+                      onPointerEnter={(e) => moveNavIndicatorTo(e.currentTarget, false)}
+                    >
+                      <PlusCircle size={16} />
+                      افزودن کتاب
+                    </NavLink>
+                  )}
+                </nav>
+              </div>
+
+              {/* Left: Theme Toggle + Notifications + Auth Actions + Mobile Hamburger */}
+              <div className="nav-actions">
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  className="theme-toggle-btn nav-enter-item"
+                  title={isDark ? 'تغییر به تم روشن' : 'تغییر به تم تیره'}
+                  aria-label={isDark ? 'تغییر به تم روشن' : 'تغییر به تم تیره'}
+                >
+                  <span ref={themeIconRef} className="theme-toggle-icon">
+                    {isDark ? <Sun size={18} /> : <Moon size={18} />}
+                  </span>
+                </button>
 
                 {isAuthenticated && (
-                  <NavLink to="/books/create" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                    <PlusCircle size={16} />
-                    افزودن کتاب
-                  </NavLink>
-                )}
-              </nav>
-            </div>
-
-            {/* Left: Theme Toggle + Notifications + Auth Actions + Mobile Hamburger */}
-            <div className="nav-actions">
-              <button
-                type="button"
-                onClick={toggleTheme}
-                className="theme-toggle-btn"
-                title={isDark ? 'تغییر به تم روشن' : 'تغییر به تم تیره'}
-                aria-label={isDark ? 'تغییر به تم روشن' : 'تغییر به تم تیره'}
-              >
-                {isDark ? <Sun size={18} /> : <Moon size={18} />}
-              </button>
-
-              {isAuthenticated && (
-                <div className="notif-bell-wrap" ref={notifWrapRef}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      hideUserMenuPopover();
-                      setNotifOpen((prev) => !prev);
-                    }}
-                    className="theme-toggle-btn"
-                    title="اعلان‌ها و پیام‌ها"
-                    aria-label="اعلان‌ها و پیام‌ها"
-                  >
-                    <Bell size={18} />
-                    {unreadCount > 0 && (
-                      <span className="notif-badge">
-                        {toPersianDigits(unreadCount > 9 ? '9+' : unreadCount)}
+                  <div className="notif-bell-wrap nav-enter-item" ref={notifWrapRef}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        hideUserMenuPopover();
+                        setNotifOpen((prev) => !prev);
+                      }}
+                      onPointerEnter={ringBell}
+                      className="theme-toggle-btn"
+                      title="اعلان‌ها و پیام‌ها"
+                      aria-label="اعلان‌ها و پیام‌ها"
+                    >
+                      <span ref={bellIconRef} className="notif-bell-icon">
+                        <Bell size={18} />
                       </span>
-                    )}
-                  </button>
+                      {unreadCount > 0 && (
+                        <span className="notif-badge">
+                          {toPersianDigits(unreadCount > 9 ? '9+' : unreadCount)}
+                        </span>
+                      )}
+                    </button>
 
-                  {notifOpen && (
-                    <>
-                      <div
-                        className="notif-mobile-backdrop"
-                        onClick={() => setNotifOpen(false)}
-                      />
-                      <div className="notif-dropdown-panel">
-                        <div
-                          style={{
-                            padding: '13px 16px',
-                            borderBottom: '1px solid var(--border)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '8px',
-                            background: 'var(--surface2)'
-                          }}
-                        >
-                          <div style={{ fontWeight: 800, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Bell size={15} color="var(--accent2)" />
-                            <span>اعلان‌های شما</span>
-                            {unreadCount > 0 && (
-                              <span className="badge badge-category" style={{ fontSize: '11px', padding: '2px 8px' }}>
-                                {toPersianDigits(unreadCount)} جدید
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            {unreadCount > 0 && (
-                              <button
-                                type="button"
-                                onClick={markAllAsRead}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  color: 'var(--accent2)',
-                                  fontSize: '12px',
-                                  fontWeight: 700,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                <CheckCheck size={14} /> خواندن همه
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => setNotifOpen(false)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: 'var(--muted)',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: '2px',
-                                cursor: 'pointer'
-                              }}
-                              aria-label="بستن اعلان‌ها"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
-                        </div>
-
-                      <div className="notif-dropdown-list">
-                        {notifications.length === 0 ? (
-                          <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: '13.5px' }}>
-                            هنوز اعلانی برای شما ثبت نشده است.
-                          </div>
-                        ) : (
-                          notifications.map((n) => (
-                            <div
-                              key={n.id}
-                              className={`notif-dropdown-item ${!n.is_read ? 'unread' : ''}`}
-                              onClick={() => {
-                                if (!n.is_read) markAsRead(n.id);
-                                setNotifOpen(false);
-                                if (n.link) navigate(n.link);
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: '34px',
-                                  height: '34px',
-                                  borderRadius: '10px',
-                                  background: 'var(--surface2)',
-                                  border: '1px solid var(--border)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  flexShrink: 0,
-                                  marginTop: '2px'
-                                }}
-                              >
-                                {getNotifIcon(n.notif_type)}
-                              </div>
-
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '3px' }}>
-                                  <span style={{ fontWeight: 800, fontSize: '13px', color: 'var(--text)' }}>
-                                    {n.title}
+                    {notifOpen &&
+                      createPortal(
+                        <>
+                          <div
+                            className="notif-mobile-backdrop"
+                            onClick={() => setNotifOpen(false)}
+                          />
+                          <div ref={notifPanelRef} className="notif-dropdown-panel">
+                            <div className="notif-dropdown-header">
+                              <div style={{ fontWeight: 800, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <Bell size={15} color="var(--accent2)" />
+                                <span>اعلان‌های شما</span>
+                                {unreadCount > 0 && (
+                                  <span className="badge badge-category" style={{ fontSize: '11px', padding: '2px 8px' }}>
+                                    {toPersianDigits(unreadCount)} جدید
                                   </span>
-                                  {!n.is_read && (
-                                    <span
-                                      style={{
-                                        width: '8px',
-                                        height: '8px',
-                                        borderRadius: '50%',
-                                        background: 'var(--accent)',
-                                        flexShrink: 0
-                                      }}
-                                    />
-                                  )}
-                                </div>
-                                <p style={{ fontSize: '12.5px', color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: '4px' }}>
-                                  {n.message}
-                                </p>
-                                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                                  {formatPersianDate(n.created_at)}
-                                </span>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                {unreadCount > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={markAllAsRead}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--accent2)',
+                                      fontSize: '12px',
+                                      fontWeight: 700,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <CheckCheck size={14} /> خواندن همه
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setNotifOpen(false)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'var(--muted)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '2px',
+                                    cursor: 'pointer'
+                                  }}
+                                  aria-label="بستن اعلان‌ها"
+                                >
+                                  <X size={16} />
+                                </button>
                               </div>
                             </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                    </>
-                  )}
+
+                            <div className="notif-dropdown-list">
+                              {notifications.length === 0 ? (
+                                <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: '13.5px' }}>
+                                  هنوز اعلانی برای شما ثبت نشده است.
+                                </div>
+                              ) : (
+                                notifications.map((n) => (
+                                  <div
+                                    key={n.id}
+                                    className={`notif-dropdown-item ${!n.is_read ? 'unread' : ''}`}
+                                    onClick={() => {
+                                      if (!n.is_read) markAsRead(n.id);
+                                      setNotifOpen(false);
+                                      if (n.link) navigate(n.link);
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        width: '34px',
+                                        height: '34px',
+                                        borderRadius: '10px',
+                                        background: 'var(--surface2)',
+                                        border: '1px solid var(--border)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        flexShrink: 0,
+                                        marginTop: '2px'
+                                      }}
+                                    >
+                                      {getNotifIcon(n.notif_type)}
+                                    </div>
+
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '3px' }}>
+                                        <span style={{ fontWeight: 800, fontSize: '13px', color: 'var(--text)' }}>
+                                          {n.title}
+                                        </span>
+                                        {!n.is_read && (
+                                          <span
+                                            style={{
+                                              width: '8px',
+                                              height: '8px',
+                                              borderRadius: '50%',
+                                              background: 'var(--accent)',
+                                              flexShrink: 0
+                                            }}
+                                          />
+                                        )}
+                                      </div>
+                                      <p style={{ fontSize: '12.5px', color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: '4px' }}>
+                                        {n.message}
+                                      </p>
+                                      <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                                        {formatPersianDate(n.created_at)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </>,
+                        document.body
+                      )}
                 </div>
               )}
 
               {isAuthenticated ? (
-                <div className="desktop-only" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div className="desktop-only nav-enter-item" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <Link
+                    ref={walletPillRef}
                     to="/wallet"
-                    className="user-pill"
+                    className="user-pill nav-wallet-pill"
                     title="کیف‌پول و تراکنش‌های مالی"
                     style={{
                       borderColor: user?.wallet_is_frozen ? 'rgba(220, 38, 38, 0.45)' : 'rgba(22, 163, 74, 0.35)',
@@ -838,6 +1116,7 @@ export const Navbar = () => {
             </div>
           </div>
         </div>
+        </div>
       </header>
 
       {/* Mobile Slide-Out Drawer */}
@@ -845,7 +1124,7 @@ export const Navbar = () => {
         className={`mobile-drawer-backdrop ${mobileMenuOpen ? 'open' : ''}`}
         onClick={() => setMobileMenuOpen(false)}
       />
-      <aside className={`mobile-drawer ${mobileMenuOpen ? 'open' : ''}`} aria-label="منوی موبایل">
+      <aside ref={mobileDrawerRef} className={`mobile-drawer ${mobileMenuOpen ? 'open' : ''}`} aria-label="منوی موبایل">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
           <Link to="/" className="brand" onClick={() => setMobileMenuOpen(false)}>
             <span className="brand-logo-box" style={{ width: '32px', height: '32px' }}>
