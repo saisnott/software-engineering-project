@@ -4,8 +4,6 @@ import {
   Book as BookIcon,
   ArrowRight,
   Clock,
-  ThumbsUp,
-  ThumbsDown,
   MessageSquare,
   Send,
   Pencil,
@@ -15,7 +13,6 @@ import {
   AlertCircle,
   Heart,
   AlertTriangle,
-  Star,
   BellPlus,
   BellOff,
   Sparkles,
@@ -23,7 +20,6 @@ import {
   ShieldCheck,
   XCircle,
   Wallet,
-  ShoppingBag,
   Lock
 } from 'lucide-react';
 import api from '../api/client';
@@ -47,13 +43,8 @@ export const BookDetailPage = () => {
   const [book, setBook] = useState(null);
   const [loading, setLoading] = useState(true);
   const [commentText, setCommentText] = useState('');
-  const [rating, setRating] = useState(5);
-  const [hoverRating, setHoverRating] = useState(0);
-  const [doesRecommend, setDoesRecommend] = useState(true);
   const [submittingComment, setSubmittingComment] = useState(false);
   const [borrowing, setBorrowing] = useState(false);
-  const [purchasing, setPurchasing] = useState(false);
-  const [payModalMode, setPayModalMode] = useState('borrow'); // 'borrow' | 'purchase'
   const [reserving, setReserving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [togglingWishlist, setTogglingWishlist] = useState(false);
@@ -113,12 +104,11 @@ export const BookDetailPage = () => {
     }
   }, [book]);
 
-  const openPaymentModal = (mode) => {
+  const openBorrowPaymentModal = () => {
     if (!isAuthenticated) {
       navigate('/login');
       return;
     }
-    setPayModalMode(mode);
     payDialogRef.current?.showModal();
   };
 
@@ -142,29 +132,6 @@ export const BookDetailPage = () => {
       showToast(errMsg, 'danger');
     } finally {
       setBorrowing(false);
-    }
-  };
-
-  const handlePurchase = async () => {
-    if (!isAuthenticated) {
-      navigate('/login');
-      return;
-    }
-    setPurchasing(true);
-    setMessage(null);
-    try {
-      const res = await api.post(`/api/books/${id}/purchase/`);
-      if (payDialogRef.current?.open) payDialogRef.current.close();
-      setMessage({ type: 'success', text: res.data.message });
-      showToast(res.data.message, 'success');
-      await Promise.all([fetchBook(), refreshProfile(), refreshNotifications()]);
-    } catch (err) {
-      if (payDialogRef.current?.open) payDialogRef.current.close();
-      const errMsg = err.response?.data?.error || 'خطا در خرید کتاب.';
-      setMessage({ type: 'danger', text: errMsg });
-      showToast(errMsg, 'danger');
-    } finally {
-      setPurchasing(false);
     }
   };
 
@@ -224,15 +191,11 @@ export const BookDetailPage = () => {
     try {
       await api.post(`/api/books/${id}/comments/`, {
         text: commentText,
-        rating,
-        does_recommend: doesRecommend,
       });
       setCommentText('');
-      setRating(5);
-      setDoesRecommend(true);
       await fetchBook();
-      setMessage({ type: 'success', text: 'دیدگاه و امتیاز شما با موفقیت ثبت شد.' });
-      showToast('دیدگاه و امتیاز شما با موفقیت ثبت شد.', 'success');
+      setMessage({ type: 'success', text: 'دیدگاه شما با موفقیت ثبت شد.' });
+      showToast('دیدگاه شما با موفقیت ثبت شد.', 'success');
       await refreshNotifications();
     } catch (err) {
       console.error('Error submitting comment', err);
@@ -592,29 +555,6 @@ export const BookDetailPage = () => {
               ) : (
                 <span />
               )}
-
-              {book.average_rating && (
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    background: 'var(--accent-soft)',
-                    border: '1px solid rgba(232, 168, 56, 0.3)',
-                    padding: '4px 12px',
-                    borderRadius: '50px',
-                    fontSize: '13px',
-                    fontWeight: 700,
-                    color: 'var(--accent2)'
-                  }}
-                >
-                  <Star size={15} fill="var(--accent2)" color="var(--accent2)" />
-                  <span>{toPersianDigits(book.average_rating)} از ۵</span>
-                  <span style={{ color: 'var(--muted)', fontWeight: 500, fontSize: '12px' }}>
-                    ({toPersianDigits(book.ratings_count)} رأی)
-                  </span>
-                </div>
-              )}
             </div>
 
             <h1 style={{ fontSize: 'clamp(24px, 3vw, 34px)', fontWeight: 800, marginBottom: '10px' }}>
@@ -660,9 +600,9 @@ export const BookDetailPage = () => {
                 }}
               >
                 <div>
-                  <span style={{ color: 'var(--muted)', display: 'block' }}>قیمت خرید دائمی</span>
+                  <span style={{ color: 'var(--muted)', display: 'block' }}>ارزش مرجع کتاب</span>
                   <strong style={{ fontSize: '15px', color: 'var(--accent2)' }} dir="ltr">
-                    {formatPrice(book.financial_info.purchase_price)}
+                    {formatPrice(book.financial_info.book_price ?? book.price)}
                   </strong>
                 </div>
                 <div>
@@ -706,11 +646,11 @@ export const BookDetailPage = () => {
                   >
                     {approvalStatus === 'rejected' ? (
                       <>
-                        <XCircle size={16} /> امکان امانت‌گیری یا خرید وجود ندارد (رد شده توسط مدیریت)
+                        <XCircle size={16} /> امکان امانت‌گیری وجود ندارد (رد شده توسط مدیریت)
                       </>
                     ) : (
                       <>
-                        <Clock size={16} /> امکان امانت‌گیری و خرید پس از تأیید مدیریت فعال می‌شود
+                        <Clock size={16} /> امکان امانت‌گیری پس از تأیید مدیریت فعال می‌شود
                       </>
                     )}
                   </div>
@@ -719,31 +659,16 @@ export const BookDetailPage = () => {
                     <CheckCircle size={16} /> این کتاب هم‌اکنون در امانت شماست
                   </div>
                 ) : book.is_available ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => openPaymentModal('borrow')}
-                      disabled={borrowing || purchasing}
-                      className="btn-primary"
-                      style={{ padding: '11px 20px' }}
-                    >
-                      <BookCheck size={17} />
-                      {borrowing ? 'در حال ثبت امانت...' : 'امانت گرفتن کتاب (۱۴ روزه)'}
-                    </button>
-
-                    {(!user || user.id !== book.user) && (
-                      <button
-                        type="button"
-                        onClick={() => openPaymentModal('purchase')}
-                        disabled={purchasing || borrowing}
-                        className="btn-success"
-                        style={{ padding: '11px 20px' }}
-                      >
-                        <ShoppingBag size={17} />
-                        {purchasing ? 'در حال خرید...' : `خرید دائمی (${formatPrice(book.price)})`}
-                      </button>
-                    )}
-                  </>
+                  <button
+                    type="button"
+                    onClick={openBorrowPaymentModal}
+                    disabled={borrowing}
+                    className="btn-primary"
+                    style={{ padding: '11px 20px' }}
+                  >
+                    <BookCheck size={17} />
+                    {borrowing ? 'در حال ثبت امانت...' : 'امانت گرفتن کتاب (۱۴ روزه)'}
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -834,11 +759,7 @@ export const BookDetailPage = () => {
                       <strong dir="ltr" style={{ color: 'var(--text)' }}>
                         ID: #{copyItem.id}
                       </strong>
-                      {copyItem.is_sold ? (
-                        <span className="badge badge-category" style={{ fontSize: '11px', padding: '2px 8px' }}>
-                          فروخته‌شده
-                        </span>
-                      ) : copyItem.is_available ? (
+                      {copyItem.is_available ? (
                         <span className="badge badge-available" style={{ fontSize: '11px', padding: '2px 8px' }}>
                           موجود
                         </span>
@@ -847,7 +768,7 @@ export const BookDetailPage = () => {
                           امانت {copyItem.current_borrower ? `(@${copyItem.current_borrower})` : ''}
                         </span>
                       )}
-                      {!copyItem.is_sold && copyItem.is_available && (book.total_copies_count ?? book.copies.length) > 1 && (
+                      {copyItem.is_available && (book.total_copies_count ?? book.copies.length) > 1 && (
                         <button
                           type="button"
                           onClick={() => handleDeleteCopy(copyItem.id)}
@@ -965,7 +886,7 @@ export const BookDetailPage = () => {
         </form>
       </dialog>
 
-      {/* Native Accessible Modal Dialog for Wallet Payment Confirmation (Borrow / Purchase) */}
+      {/* Native Accessible Modal Dialog for Wallet Payment Confirmation (Borrow) */}
       <dialog
         ref={payDialogRef}
         className="confirm-dialog"
@@ -975,10 +896,7 @@ export const BookDetailPage = () => {
         {(() => {
           const fin = book.financial_info || {};
           const userBalance = parseFloat(user?.wallet_balance ?? 0);
-          const isPurchase = payModalMode === 'purchase';
-          const requiredAmount = isPurchase
-            ? parseFloat(fin.purchase_price ?? book.price ?? 0)
-            : parseFloat(fin.total_borrow_required ?? 0);
+          const requiredAmount = parseFloat(fin.total_borrow_required ?? 0);
           const borrowFee = parseFloat(fin.borrow_fee ?? 0);
           const depositAmount = parseFloat(fin.deposit_amount ?? 0);
           const hasEnough = userBalance >= requiredAmount;
@@ -986,10 +904,10 @@ export const BookDetailPage = () => {
 
           return (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: isPurchase ? 'var(--success)' : 'var(--accent2)' }}>
-                {isPurchase ? <ShoppingBag size={24} /> : <Wallet size={24} />}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--accent2)' }}>
+                <Wallet size={24} />
                 <h2 id={payDialogTitleId} style={{ fontSize: '18.5px', fontWeight: 800 }}>
-                  {isPurchase ? 'تأیید خرید دائمی کتاب با کیف‌پول' : 'تأیید پرداخت و امانت گرفتن کتاب'}
+                  تأیید پرداخت و امانت گرفتن کتاب
                 </h2>
               </div>
 
@@ -1004,25 +922,16 @@ export const BookDetailPage = () => {
                     <strong dir="ltr" style={{ color: 'var(--success)' }}>{formatPrice(userBalance)}</strong>
                   </div>
 
-                  {isPurchase ? (
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>قیمت خرید دائمی کتاب:</span>
-                      <strong dir="ltr">{formatPrice(requiredAmount)}</strong>
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>هزینه امانت ۱۴ روزه:</span>
-                        <strong dir="ltr">{formatPrice(borrowFee)}</strong>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <Lock size={13} color="var(--accent2)" /> ودیعه مسدودشونده (قابل برگشت):
-                        </span>
-                        <strong dir="ltr" style={{ color: 'var(--accent2)' }}>{formatPrice(depositAmount)}</strong>
-                      </div>
-                    </>
-                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>هزینه امانت ۱۴ روزه:</span>
+                    <strong dir="ltr">{formatPrice(borrowFee)}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      <Lock size={13} color="var(--accent2)" /> ودیعه مسدودشونده (قابل برگشت):
+                    </span>
+                    <strong dir="ltr" style={{ color: 'var(--accent2)' }}>{formatPrice(depositAmount)}</strong>
+                  </div>
 
                   <div style={{ borderTop: '1px solid var(--border)', paddingTop: '8px', display: 'flex', justifyContent: 'space-between', fontWeight: 800, color: 'var(--text)' }}>
                     <span>مبلغ کل مورد نیاز:</span>
@@ -1060,16 +969,14 @@ export const BookDetailPage = () => {
                 {hasEnough ? (
                   <button
                     type="button"
-                    onClick={isPurchase ? handlePurchase : handleBorrow}
-                    disabled={borrowing || purchasing}
-                    className={isPurchase ? 'btn-success' : 'btn-primary'}
+                    onClick={handleBorrow}
+                    disabled={borrowing}
+                    className="btn-primary"
                   >
-                    {isPurchase ? <ShoppingBag size={15} /> : <BookCheck size={15} />}
-                    {borrowing || purchasing
+                    <BookCheck size={15} />
+                    {borrowing
                       ? 'در حال پردازش...'
-                      : isPurchase
-                        ? `پرداخت ${formatPrice(requiredAmount)} و خرید کتاب`
-                        : `تأیید و امانت کتاب (${formatPrice(requiredAmount)})`}
+                      : `تأیید و امانت کتاب (${formatPrice(requiredAmount)})`}
                   </button>
                 ) : (
                   <Link
@@ -1107,35 +1014,11 @@ export const BookDetailPage = () => {
                     <span style={{ fontWeight: 700, color: 'var(--accent2)', fontSize: '14px' }}>
                       @{comment.username}
                     </span>
-
-                    {/* Reviewer Star Rating */}
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', marginRight: '6px' }}>
-                      {[1, 2, 3, 4, 5].map((starNum) => (
-                        <Star
-                          key={starNum}
-                          size={14}
-                          fill={starNum <= (comment.rating || 5) ? 'var(--accent2)' : 'none'}
-                          color={starNum <= (comment.rating || 5) ? 'var(--accent2)' : 'var(--muted)'}
-                        />
-                      ))}
-                    </div>
                   </div>
                   <span style={{ fontSize: '12.5px', color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                     <Clock size={13} />
                     {formatPersianDate(comment.datetime_created)}
                   </span>
-                </div>
-
-                <div style={{ marginBottom: '12px' }}>
-                  {comment.does_recommend ? (
-                    <span className="badge badge-available">
-                      <ThumbsUp size={12} /> مطالعه این کتاب را پیشنهاد می‌کند
-                    </span>
-                  ) : (
-                    <span className="badge badge-borrowed">
-                      <ThumbsDown size={12} /> مطالعه این کتاب را پیشنهاد نمی‌کند
-                    </span>
-                  )}
                 </div>
 
                 <p style={{ color: 'var(--text-dim)', fontSize: '14.5px', whiteSpace: 'pre-line', lineHeight: '1.85' }}>
@@ -1153,50 +1036,12 @@ export const BookDetailPage = () => {
         {/* Add Comment Form */}
         {!isApproved ? (
           <div className="card" style={{ textAlign: 'center', padding: '24px', color: 'var(--muted)' }}>
-            امکان ثبت دیدگاه و امتیاز پس از تأیید و انتشار نهایی کتاب توسط مدیریت فعال خواهد شد.
+            امکان ثبت دیدگاه پس از تأیید و انتشار نهایی کتاب توسط مدیریت فعال خواهد شد.
           </div>
         ) : isAuthenticated ? (
           <div className="card" style={{ padding: '26px' }}>
-            <h4 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '16px' }}>ثبت دیدگاه و امتیاز جدید</h4>
+            <h4 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '16px' }}>ثبت دیدگاه جدید</h4>
             <form onSubmit={handleCommentSubmit}>
-              {/* 5-Star Rating Selector */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-dim)' }}>
-                  امتیاز شما به این کتاب:
-                </span>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                  {[1, 2, 3, 4, 5].map((starNum) => {
-                    const active = starNum <= (hoverRating || rating);
-                    return (
-                      <button
-                        key={starNum}
-                        type="button"
-                        onClick={() => setRating(starNum)}
-                        onMouseEnter={() => setHoverRating(starNum)}
-                        onMouseLeave={() => setHoverRating(0)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          padding: '4px',
-                          display: 'inline-flex',
-                          transition: 'transform 0.15s'
-                        }}
-                        aria-label={`${toPersianDigits(starNum)} ستاره`}
-                      >
-                        <Star
-                          size={22}
-                          fill={active ? 'var(--accent2)' : 'none'}
-                          color={active ? 'var(--accent2)' : 'var(--muted)'}
-                        />
-                      </button>
-                    );
-                  })}
-                </div>
-                <span className="badge badge-category">
-                  {toPersianDigits(rating)} از ۵ ستاره
-                </span>
-              </div>
-
               <div className="form-group">
                 <textarea
                   className="form-control"
@@ -1208,16 +1053,7 @@ export const BookDetailPage = () => {
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px' }}>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '14px', color: 'var(--text-dim)' }}>
-                  <input
-                    type="checkbox"
-                    checked={doesRecommend}
-                    onChange={(e) => setDoesRecommend(e.target.checked)}
-                  />
-                  <span>مطالعه این کتاب را به دیگران پیشنهاد می‌کنم</span>
-                </label>
-
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
                 <button
                   type="submit"
                   disabled={submittingComment}
@@ -1225,7 +1061,7 @@ export const BookDetailPage = () => {
                   style={{ padding: '9px 22px', fontSize: '14px' }}
                 >
                   <Send size={15} />
-                  {submittingComment ? 'در حال ارسال...' : 'ارسال دیدگاه و امتیاز'}
+                  {submittingComment ? 'در حال ارسال...' : 'ارسال دیدگاه'}
                 </button>
               </div>
             </form>
@@ -1233,7 +1069,7 @@ export const BookDetailPage = () => {
         ) : (
           <div className="card" style={{ textAlign: 'center', padding: '24px' }}>
             <p style={{ color: 'var(--text-dim)', fontSize: '14.5px' }}>
-              برای ثبت دیدگاه و امتیاز درباره این کتاب، لطفاً ابتدا{' '}
+              برای ثبت دیدگاه درباره این کتاب، لطفاً ابتدا{' '}
               <Link to="/login" style={{ color: 'var(--accent2)', fontWeight: 700 }}>
                 وارد حساب کاربری خود شوید
               </Link>

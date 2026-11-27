@@ -8,7 +8,6 @@ from django.utils import timezone
 from .models import (
     Book,
     BookCopy,
-    BookOrder,
     Borrowing,
     FinancialSettings,
     Notification,
@@ -55,12 +54,10 @@ def parse_strict_decimal(raw_value, min_val=Decimal('0.01'), max_val=None):
 
 
 def generate_reference_code(prefix='TX'):
-    model_cls = BookOrder if prefix == 'ORD' else WalletTransaction
-    field_name = 'order_code' if prefix == 'ORD' else 'reference_code'
     prefix_dash = f'{prefix}-'
-    existing_codes = model_cls.objects.filter(
-        **{f'{field_name}__startswith': prefix_dash}
-    ).values_list(field_name, flat=True)
+    existing_codes = WalletTransaction.objects.filter(
+        reference_code__startswith=prefix_dash
+    ).values_list('reference_code', flat=True)
     max_num = 0
     for code in existing_codes:
         suffix = code[len(prefix_dash):]
@@ -135,7 +132,7 @@ def calculate_book_fees(book, fin_settings=None):
     daily_late_fee = quantize_money(fin.daily_late_fee)
     owner_share_percent = quantize_money(fin.owner_share_percent)
     return {
-        'purchase_price': price,
+        'book_price': price,
         'borrow_fee': borrow_fee,
         'deposit_amount': deposit_amount,
         'total_borrow_required': total_borrow_required,
@@ -171,7 +168,7 @@ def _ensure_wallet_usable(wallet, user):
         )
 
 
-def _credit_owner_share(owner_wallet, owner_user, owner_share, description, book=None, borrowing=None, order=None, actor=None):
+def _credit_owner_share(owner_wallet, owner_user, owner_share, description, book=None, borrowing=None, actor=None):
     if not owner_wallet or not owner_user or owner_share <= ZERO:
         return None
     before = owner_wallet.balance
@@ -190,7 +187,6 @@ def _credit_owner_share(owner_wallet, owner_user, owner_share, description, book
         related_book=book,
         book_title_snapshot=book.title if book else '',
         related_borrowing=borrowing,
-        related_order=order,
         created_by=actor,
     )
     Notification.objects.create(
@@ -330,96 +326,6 @@ def adjust_wallet_by_admin(target_user, action, raw_amount, reason, admin_user):
             link='/wallet',
         )
         return wallet, tx
-
-
-def charge_and_split_purchase(buyer, book, copy_obj):
-    if book.user_id and book.user_id == buyer.id:
-        raise WalletOperationError('شما ثبت‌کننده این کتاب هستید و نمی‌توانید کتاب خودتان را خریداری کنید.')
-
-    fin = get_financial_settings()
-    price = quantize_money(book.price or ZERO)
-    owner_share, platform_commission, seller = compute_revenue_split(price, book, buyer, fin)
-
-    wallets = lock_wallets_by_user_ids(buyer.id, seller.id if seller else None)
-    buyer_wallet = wallets[buyer.id]
-    seller_wallet = wallets.get(seller.id) if seller else None
-
-    _ensure_wallet_usable(buyer_wallet, buyer)
-
-    if buyer_wallet.balance < price:
-        shortfall = quantize_money(price - buyer_wallet.balance)
-        raise WalletOperationError(
-            f'موجودی کیف‌پول شما (${buyer_wallet.balance:.2f}) برای خرید کتاب «{book.title}» (${price:.2f}) کافی نیست. کمبود: ${shortfall:.2f}.',
-            extra={
-                'required_amount': f'{price:.2f}',
-                'current_balance': f'{buyer_wallet.balance:.2f}',
-                'shortfall': f'{shortfall:.2f}',
-            }
-        )
-
-    copy_obj.is_sold = True
-    copy_obj.is_available = False
-    copy_obj.save(update_fields=['is_sold', 'is_available'])
-    book.sync_availability()
-
-    order = BookOrder.objects.create(
-        order_code=generate_reference_code('ORD'),
-        buyer=buyer,
-        buyer_username_snapshot=buyer.username,
-        seller=seller,
-        seller_username_snapshot=seller.username if seller else '',
-        book=book,
-        book_title_snapshot=book.title,
-        book_author_snapshot=book.author,
-        book_copy=copy_obj,
-        copy_id_snapshot=copy_obj.id,
-        total_price=price,
-        owner_share=owner_share,
-        platform_commission=platform_commission,
-        status='completed',
-    )
-
-    before = buyer_wallet.balance
-    if price > ZERO:
-        buyer_wallet.balance = quantize_money(before - price)
-        buyer_wallet.save(update_fields=['balance', 'updated_at'])
-
-    buyer_tx = WalletTransaction.objects.create(
-        wallet=buyer_wallet,
-        reference_code=generate_reference_code('PUR'),
-        tx_type='purchase',
-        direction='debit',
-        amount=price,
-        platform_commission=platform_commission,
-        balance_before=before,
-        balance_after=buyer_wallet.balance,
-        description=f'خرید دائمی کتاب «{book.title}» (جلد #{copy_obj.id} - کد سفارش: {order.order_code})',
-        related_book=book,
-        book_title_snapshot=book.title,
-        related_order=order,
-        created_by=buyer,
-    )
-
-    if seller and owner_share > ZERO:
-        _credit_owner_share(
-            owner_wallet=seller_wallet,
-            owner_user=seller,
-            owner_share=owner_share,
-            description=f'سهم {fin.owner_share_percent:.0f}% از فروش کتاب «{book.title}» به @{buyer.username}',
-            book=book,
-            order=order,
-            actor=buyer,
-        )
-
-    Notification.objects.create(
-        user=buyer,
-        title='خرید کتاب با موفقیت ثبت شد',
-        message=f'کتاب «{book.title}» (شناسه جلد #{copy_obj.id}) به مبلغ ${price:.2f} خریداری شد. کد سفارش: {order.order_code}.',
-        notif_type='wallet',
-        link='/wallet',
-    )
-
-    return order, buyer_tx
 
 
 def charge_borrow_and_lock_deposit(borrower, book, borrowing, waive_fee=False, actor=None):

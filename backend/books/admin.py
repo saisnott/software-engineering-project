@@ -2,7 +2,6 @@ from django.contrib import admin
 from .models import (
     Book,
     BookCopy,
-    BookOrder,
     Borrowing,
     Category,
     Comment,
@@ -31,13 +30,6 @@ class WalletTransactionAdmin(admin.ModelAdmin):
     list_display = ('reference_code', 'wallet', 'tx_type', 'direction', 'amount', 'platform_commission', 'created_at')
     list_filter = ('tx_type', 'direction', 'created_at')
     search_fields = ('reference_code', 'wallet__user__username', 'description')
-
-
-@admin.register(BookOrder)
-class BookOrderAdmin(admin.ModelAdmin):
-    list_display = ('order_code', 'buyer_username_snapshot', 'seller_username_snapshot', 'book_title_snapshot', 'total_price', 'owner_share', 'platform_commission', 'created_at')
-    list_filter = ('status', 'created_at')
-    search_fields = ('order_code', 'buyer_username_snapshot', 'book_title_snapshot')
 
 
 admin.site.register(FinancialSettings)

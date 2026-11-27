@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Wallet,
   TrendingUp,
   Lock,
-  ShoppingBag,
+  BookOpen,
   Settings,
   Receipt,
   CheckCircle,
@@ -129,14 +128,13 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
   if (loading) {
     return (
       <div className="card" style={{ padding: '28px', marginBottom: '44px', textAlign: 'center', color: 'var(--muted)' }}>
-        در حال بارگذاری گزارش‌های مالی فروشگاه...
+        در حال بارگذاری گزارش‌های مالی کتابخانه...
       </div>
     );
   }
 
   const summary = financeData?.summary || {};
   const transactions = financeData?.transactions || [];
-  const orders = financeData?.orders || [];
 
   return (
     <div style={{ marginBottom: '48px' }}>
@@ -144,10 +142,10 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
         <div>
           <h2 style={{ fontSize: '22px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Wallet size={23} color="var(--success)" />
-            مدیریت و گزارش مالی فروشگاه (کیف‌پول و تقسیم درآمد)
+            مدیریت و گزارش مالی کتابخانه (کیف‌پول و تقسیم درآمد)
           </h2>
           <p style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px' }}>
-            پایش درآمد خالص فروشگاه، سهم صاحبان کتاب، ودیعه‌های بلوکه‌شده، خریدها و تراکنش‌های کل سیستم
+            پایش درآمد خالص کتابخانه، سهم صاحبان کتاب، ودیعه‌های بلوکه‌شده، هزینه‌های امانت و تراکنش‌های کل سیستم
           </p>
         </div>
       </div>
@@ -156,14 +154,14 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '26px' }}>
         <div className="card" style={{ padding: '20px', borderColor: 'rgba(22, 163, 74, 0.35)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: '8px', fontSize: '13px' }}>
-            <span>درآمد خالص فروشگاه (کارمزدها)</span>
+            <span>درآمد خالص کتابخانه (کارمزدها)</span>
             <TrendingUp size={18} color="var(--success)" />
           </div>
           <div style={{ fontSize: '26px', fontWeight: 900, color: 'var(--success)' }} dir="ltr">
             {formatPrice(summary.platform_revenue_total ?? 0)}
           </div>
           <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            سهم پلتفرم از خرید، امانت، تمدید و جریمه
+            سهم پلتفرم از امانت، تمدید و جریمه
           </div>
         </div>
 
@@ -195,14 +193,14 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
 
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: '8px', fontSize: '13px' }}>
-            <span>حجم خریدها و جریمه‌ها</span>
-            <ShoppingBag size={18} color="var(--accent2)" />
+            <span>درآمد امانت، تمدید و جریمه‌ها</span>
+            <BookOpen size={18} color="var(--accent2)" />
           </div>
           <div style={{ fontSize: '24px', fontWeight: 900 }} dir="ltr">
-            {formatPrice(summary.purchase_volume_total ?? 0)}
+            {formatPrice(summary.borrow_fees_total ?? 0)}
           </div>
           <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            {toPersianDigits(summary.total_orders_count ?? 0)} سفارش | جریمه وصولی: <strong dir="ltr">{formatPrice(summary.late_fees_collected_total ?? 0)}</strong>
+            جریمه وصولی: <strong dir="ltr">{formatPrice(summary.late_fees_collected_total ?? 0)}</strong> | معوقه: <strong dir="ltr">{formatPrice(summary.unpaid_fines_total ?? 0)}</strong>
           </div>
         </div>
       </div>
@@ -412,52 +410,6 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
         </div>
       )}
 
-      {/* Recent Orders Table */}
-      {orders.length > 0 && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '24px' }}>
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 800, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ShoppingBag size={18} color="var(--success)" />
-            آخرین خریدهای دائمی ثبت‌شده ({toPersianDigits(orders.length)})
-          </div>
-          <div className="table-wrapper" tabIndex={0} role="region" aria-label="سفارش‌های خرید">
-            <table>
-              <thead>
-                <tr>
-                  <th>کد سفارش</th>
-                  <th>کتاب</th>
-                  <th>خریدار</th>
-                  <th>ثبت‌کننده کتاب</th>
-                  <th>مبلغ کل</th>
-                  <th>سهم مالک</th>
-                  <th>کارمزد فروشگاه</th>
-                  <th>تاریخ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.slice(0, 15).map((ord) => (
-                  <tr key={ord.id}>
-                    <td><span className="code-mono-badge" style={{ fontSize: '11px' }}>{ord.order_code}</span></td>
-                    <td>
-                      {ord.book ? (
-                        <Link to={`/books/${ord.book}`} style={{ fontWeight: 700 }}>{ord.book_title}</Link>
-                      ) : (
-                        <strong>{ord.book_title}</strong>
-                      )}
-                    </td>
-                    <td>@{ord.buyer_username}</td>
-                    <td>@{ord.seller_username}</td>
-                    <td dir="ltr" style={{ fontWeight: 700 }}>{formatPrice(ord.total_price)}</td>
-                    <td dir="ltr" style={{ color: 'var(--success)', fontWeight: 700 }}>{formatPrice(ord.owner_share)}</td>
-                    <td dir="ltr" style={{ color: 'var(--accent2)', fontWeight: 700 }}>{formatPrice(ord.platform_commission)}</td>
-                    <td style={{ fontSize: '12px', color: 'var(--muted)' }}>{formatPersianDate(ord.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {/* System Transactions Ledger */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
@@ -488,7 +440,6 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
             >
               <option value="">همه انواع تراکنش</option>
               <option value="topup">شارژ کیف‌پول</option>
-              <option value="purchase">خرید کتاب</option>
               <option value="borrow_fee">هزینه امانت</option>
               <option value="extend_fee">هزینه تمدید</option>
               <option value="owner_earning">درآمد صاحبان کتاب</option>
@@ -516,7 +467,7 @@ export const ManagerFinanceSection = ({ membersDirectory = [], isSuperuser = fal
                   <th>نوع</th>
                   <th>شرح</th>
                   <th>مبلغ</th>
-                  <th>کارمزد فروشگاه</th>
+                  <th>کارمزد کتابخانه</th>
                   <th>تاریخ</th>
                 </tr>
               </thead>

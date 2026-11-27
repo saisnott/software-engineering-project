@@ -15,12 +15,10 @@ import {
   Save,
   Activity,
   Award,
-  Star,
   MessageSquare,
   Search,
   Wallet,
   Lock,
-  ShoppingBag,
   TrendingUp
 } from 'lucide-react';
 import api from '../api/client';
@@ -238,7 +236,6 @@ export const UserDashboardPage = () => {
     wishlist = [],
     waitlist = [],
     submitted_books = [],
-    purchased_orders = [],
     wallet_summary = null,
     reading_stats = {},
     activity_timeline = []
@@ -328,7 +325,7 @@ export const UserDashboardPage = () => {
               profileDialogRef.current?.showModal();
             }}
           >
-            <UserCog size={16} /> ویرایش پروفایل و رمز عبور
+            <UserCog size={16} /> ویرایش پروفایل
           </button>
           <Link to="/books/create" className="btn-primary" style={{ fontSize: '13.5px' }}>
             <PlusCircle size={16} /> افزودن کتاب جدید
@@ -515,7 +512,7 @@ export const UserDashboardPage = () => {
 
           <Link to="/wallet" className="btn-primary" style={{ fontSize: '13.5px', padding: '9px 18px' }}>
             <Wallet size={16} />
-            مدیریت و شارژ کیف‌پول
+            کیف‌پول
           </Link>
         </div>
       )}
@@ -567,17 +564,12 @@ export const UserDashboardPage = () => {
 
         <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '20px' }}>
           <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(232, 168, 56, 0.14)', color: 'var(--accent2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Star size={24} />
+            <MessageSquare size={24} />
           </div>
           <div>
-            <div style={{ fontSize: '12.5px', color: 'var(--muted)' }}>دیدگاه‌ها و میانگین امتیاز من</div>
+            <div style={{ fontSize: '12.5px', color: 'var(--muted)' }}>دیدگاه‌های ثبت‌شده من</div>
             <div style={{ fontSize: '20px', fontWeight: 900, color: 'var(--text)' }}>
               {toPersianDigits(reading_stats.comments_count ?? 0)} نظر
-              {reading_stats.average_user_rating && (
-                <span style={{ fontSize: '13px', color: 'var(--accent2)', marginRight: '8px' }}>
-                  (★ {toPersianDigits(reading_stats.average_user_rating)})
-                </span>
-              )}
             </div>
           </div>
         </div>
@@ -707,50 +699,6 @@ export const UserDashboardPage = () => {
           </div>
         )}
       </div>
-
-      {/* 1.4. Purchased Books (Orders) */}
-      {purchased_orders.length > 0 && (
-        <div style={{ marginBottom: '48px' }}>
-          <h2 style={{ fontSize: '21px', fontWeight: 800, marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ShoppingBag size={22} color="var(--success)" />
-            کتاب‌های خریداری‌شده من ({toPersianDigits(purchased_orders.length)})
-          </h2>
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="table-wrapper" tabIndex={0} role="region" aria-label="کتاب‌های خریداری‌شده من">
-              <table>
-                <thead>
-                  <tr>
-                    <th>کد سفارش</th>
-                    <th>عنوان کتاب</th>
-                    <th>شناسه جلد</th>
-                    <th>مبلغ پرداختی</th>
-                    <th>تاریخ خرید</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {purchased_orders.map((ord) => (
-                    <tr key={ord.id}>
-                      <td><span className="code-mono-badge">{ord.order_code}</span></td>
-                      <td>
-                        {ord.book ? (
-                          <Link to={`/books/${ord.book}`} style={{ fontWeight: 700, color: 'var(--text)' }}>
-                            {ord.book_title}
-                          </Link>
-                        ) : (
-                          <strong>{ord.book_title}</strong>
-                        )}
-                      </td>
-                      <td dir="ltr">{ord.copy_id ? `#${ord.copy_id}` : '—'}</td>
-                      <td dir="ltr" style={{ fontWeight: 700, color: 'var(--accent2)' }}>{formatPrice(ord.total_price)}</td>
-                      <td>{formatPersianDate(ord.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 1.5. User's Submitted Books & Approval Status */}
       {submitted_books.length > 0 && (
@@ -982,7 +930,7 @@ export const UserDashboardPage = () => {
               className={`tab-pill-btn ${activityFilter === 'comment' ? 'active' : ''}`}
               onClick={() => setActivityFilter('comment')}
             >
-              دیدگاه و امتیازها
+              دیدگاه‌ها
             </button>
           </div>
         </div>
@@ -1008,7 +956,7 @@ export const UserDashboardPage = () => {
                   badgeClass = 'badge-category';
                 } else if (act.type === 'comment') {
                   dotColor = 'var(--accent)';
-                  badgeLabel = `ثبت دیدگاه (★ ${toPersianDigits(act.rating || 5)})`;
+                  badgeLabel = 'ثبت دیدگاه';
                   badgeClass = 'badge-category';
                 }
 

@@ -95,7 +95,7 @@ class Book(models.Model):
             BookCopy.objects.create(book=self, is_available=self.is_available)
 
     def sync_availability(self):
-        has_available = self.copies.filter(is_available=True, is_sold=False).exists()
+        has_available = self.copies.filter(is_available=True).exists()
         if self.is_available != has_available:
             self.is_available = has_available
             super().save(update_fields=['is_available'])
@@ -105,7 +105,6 @@ class Book(models.Model):
 class BookCopy(models.Model):
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='copies')
     is_available = models.BooleanField(default=True)
-    is_sold = models.BooleanField(default=False, verbose_name="فروخته‌شده")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -119,12 +118,10 @@ class BookCopy(models.Model):
 
 class Comment(models.Model):
     text = models.TextField()
-    rating = models.PositiveSmallIntegerField(default=5)
     datetime_created = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='comments')
     is_active = models.BooleanField(default=True)
-    does_recommend = models.BooleanField(default=False)
 
     def __str__(self):
         return f'{self.user}: {self.text}'
@@ -277,76 +274,19 @@ class Wallet(models.Model):
         return f"کیف‌پول @{self.user.username} (${self.balance})"
 
 
-class BookOrder(models.Model):
-    STATUS_CHOICES = [
-        ('completed', 'تکمیل‌شده'),
-        ('refunded', 'بازگشت وجه'),
-    ]
-
-    order_code = models.CharField(max_length=40, unique=True)
-    buyer = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='book_orders'
-    )
-    buyer_username_snapshot = models.CharField(max_length=150, blank=True, default='')
-    seller = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='book_sales'
-    )
-    seller_username_snapshot = models.CharField(max_length=150, blank=True, default='')
-    book = models.ForeignKey(
-        Book,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='orders'
-    )
-    book_title_snapshot = models.CharField(max_length=255)
-    book_author_snapshot = models.CharField(max_length=255, blank=True, default='')
-    book_copy = models.ForeignKey(
-        BookCopy,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='orders'
-    )
-    copy_id_snapshot = models.PositiveIntegerField(null=True, blank=True)
-    total_price = models.DecimalField(max_digits=10, decimal_places=2)
-    owner_share = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    platform_commission = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='completed')
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['-created_at']
-        verbose_name = "سفارش خرید کتاب"
-        verbose_name_plural = "سفارش‌های خرید کتاب"
-
-    def __str__(self):
-        return f"{self.order_code} - {self.book_title_snapshot} (${self.total_price})"
-
-
 class WalletTransaction(models.Model):
     TX_TYPE_CHOICES = [
         ('signup_bonus', 'اعتبار هدیه اولیه'),
         ('topup', 'شارژ کیف‌پول'),
-        ('purchase', 'خرید کتاب'),
         ('borrow_fee', 'هزینه امانت کتاب'),
         ('extend_fee', 'هزینه تمدید امانت'),
         ('deposit_lock', 'مسدودسازی ودیعه امانت'),
         ('deposit_release', 'آزادسازی ودیعه امانت'),
         ('late_fee', 'جریمه تأخیر در تحویل'),
         ('fine_settlement', 'تسویه جریمه معوقه'),
-        ('owner_earning', 'درآمد فروش/امانت کتاب'),
+        ('owner_earning', 'درآمد امانت کتاب'),
         ('admin_credit', 'افزایش دستی توسط مدیر'),
         ('admin_debit', 'کسر دستی توسط مدیر'),
-        ('refund', 'بازگشت وجه'),
     ]
 
     DIRECTION_CHOICES = [
@@ -371,9 +311,6 @@ class WalletTransaction(models.Model):
     book_title_snapshot = models.CharField(max_length=255, blank=True, default='')
     related_borrowing = models.ForeignKey(
         Borrowing, on_delete=models.SET_NULL, null=True, blank=True, related_name='wallet_transactions'
-    )
-    related_order = models.ForeignKey(
-        BookOrder, on_delete=models.SET_NULL, null=True, blank=True, related_name='wallet_transactions'
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

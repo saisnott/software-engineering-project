@@ -3,7 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Avg, F, Prefetch, Q, Sum
+from django.db.models import F, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -14,7 +14,6 @@ from rest_framework.views import APIView
 from .models import (
     Book,
     BookCopy,
-    BookOrder,
     Borrowing,
     Category,
     Comment,
@@ -27,7 +26,6 @@ from .serializers import (
     BookCopySerializer,
     BookDetailSerializer,
     BookListSerializer,
-    BookOrderSerializer,
     BorrowingSerializer,
     CategorySerializer,
     CommentSerializer,
@@ -40,7 +38,6 @@ from .wallet_service import (
     ZERO,
     WalletOperationError,
     adjust_wallet_by_admin,
-    charge_and_split_purchase,
     charge_borrow_and_lock_deposit,
     charge_extension_fee,
     ensure_user_wallet,
@@ -234,11 +231,10 @@ class APIRootView(APIView):
                 'notifications': uri('notifications/'),
                 'notifications_mark_read': uri('notifications/mark-read/'),
             },
-            'wallet_and_orders': {
+            'wallet': {
                 'wallet_detail': uri('wallet/'),
                 'wallet_topup': uri('wallet/topup/'),
                 'wallet_pay_fines': uri('wallet/pay-fines/'),
-                'orders': uri('orders/'),
             },
             'auth': {
                 'login': uri('auth/login/'),
@@ -528,14 +524,12 @@ class BookCopyCreateAPIView(APIView):
             )
 
         all_copies = book.copies.all()
-        unsold_copies = all_copies.filter(is_sold=False)
         return Response({
             'message': f'{count} جلد جدید به کتاب «{book.title}» اضافه شد.',
             'created_copies': BookCopySerializer(created_copies, many=True, context={'request': request}).data,
             'copies': BookCopySerializer(all_copies, many=True, context={'request': request}).data,
-            'total_copies_count': unsold_copies.count(),
-            'available_copies_count': unsold_copies.filter(is_available=True).count(),
-            'sold_copies_count': all_copies.filter(is_sold=True).count(),
+            'total_copies_count': all_copies.count(),
+            'available_copies_count': all_copies.filter(is_available=True).count(),
             'is_available': book.is_available,
         }, status=status.HTTP_201_CREATED)
 
@@ -553,17 +547,12 @@ class BookCopyDeleteAPIView(APIView):
 
         with transaction.atomic():
             copy_obj = get_object_or_404(BookCopy.objects.select_for_update(), id=copy_id, book=book)
-            if copy_obj.is_sold:
-                return Response(
-                    {'error': f'شناسه #{copy_obj.id} قبلاً فروخته شده است و امکان حذف آن وجود ندارد.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
             if not copy_obj.is_available or Borrowing.objects.filter(book_copy=copy_obj, return_date__isnull=True).exists():
                 return Response(
                     {'error': f'شناسه #{copy_obj.id} هم‌اکنون در دست امانت است و امکان حذف آن وجود ندارد.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            if book.copies.filter(is_sold=False).count() <= 1:
+            if book.copies.count() <= 1:
                 return Response(
                     {'error': 'هر کتاب باید حداقل ۱ شناسه داشته باشد. برای حذف کامل کتاب از گزینه حذف کتاب استفاده کنید.'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -574,13 +563,11 @@ class BookCopyDeleteAPIView(APIView):
             book.sync_availability()
 
         all_copies = book.copies.all()
-        unsold_copies = all_copies.filter(is_sold=False)
         return Response({
             'message': f'شناسه #{deleted_id} با موفقیت حذف شد.',
             'copies': BookCopySerializer(all_copies, many=True, context={'request': request}).data,
-            'total_copies_count': unsold_copies.count(),
-            'available_copies_count': unsold_copies.filter(is_available=True).count(),
-            'sold_copies_count': all_copies.filter(is_sold=True).count(),
+            'total_copies_count': all_copies.count(),
+            'available_copies_count': all_copies.filter(is_available=True).count(),
             'is_available': book.is_available,
         }, status=status.HTTP_200_OK)
 
@@ -602,12 +589,12 @@ class CommentCreateAPIView(generics.CreateAPIView):
     def perform_create(self, serializer):
         book_id = self.kwargs.get('book_id')
         book = get_object_or_404(Book, id=book_id)
-        comment = serializer.save(user=self.request.user, book=book)
+        serializer.save(user=self.request.user, book=book)
         if book.user_id and book.user_id != self.request.user.id:
             Notification.objects.create(
                 user=book.user,
                 title='دیدگاه جدید برای کتاب شما',
-                message=f"کاربر @{self.request.user.username} دیدگاهی با امتیاز {comment.rating} ستاره برای کتاب «{book.title}» ثبت کرد.",
+                message=f"کاربر @{self.request.user.username} دیدگاه جدیدی برای کتاب «{book.title}» ثبت کرد.",
                 notif_type='comment',
                 link=f'/books/{book.id}'
             )
@@ -638,14 +625,14 @@ class BorrowBookAPIView(APIView):
 
                 available_copy = (
                     BookCopy.objects.select_for_update()
-                    .filter(book=book, is_available=True, is_sold=False)
+                    .filter(book=book, is_available=True)
                     .order_by('id')
                     .first()
                 )
                 if not available_copy or not book.is_available:
                     book.sync_availability()
                     return Response(
-                        {"error": "این کتاب در حال حاضر موجود نیست (امانت داده شده یا فروخته شده است)."},
+                        {"error": "این کتاب در حال حاضر موجود نیست و تمام جلدهای آن در دست امانت است."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
@@ -699,55 +686,6 @@ class BorrowBookAPIView(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
-class PurchaseBookAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request, pk):
-        try:
-            with transaction.atomic():
-                book = get_object_or_404(Book.objects.select_for_update(), id=pk)
-
-                if book.approval_status != 'approved':
-                    return Response(
-                        {"error": "این کتاب هنوز توسط مدیریت کتابخانه تأیید نشده است و امکان خرید آن وجود ندارد."},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-                if not book.copies.exists():
-                    BookCopy.objects.create(book=book, is_available=book.is_available)
-
-                available_copy = (
-                    BookCopy.objects.select_for_update()
-                    .filter(book=book, is_available=True, is_sold=False)
-                    .order_by('id')
-                    .first()
-                )
-                if not available_copy or not book.is_available:
-                    book.sync_availability()
-                    return Response(
-                        {"error": "در حال حاضر جلد آزادی از این کتاب برای خرید در مخزن موجود نیست."},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-                order, tx = charge_and_split_purchase(
-                    buyer=request.user,
-                    book=book,
-                    copy_obj=available_copy,
-                )
-        except WalletOperationError as exc:
-            payload = {"error": exc.message}
-            payload.update(exc.extra)
-            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
-
-        wallet = ensure_user_wallet(request.user)
-        return Response({
-            "message": f"کتاب «{book.title}» (جلد #{available_copy.id}) با موفقیت به مبلغ ${order.total_price:.2f} خریداری شد.",
-            "order": BookOrderSerializer(order, context={'request': request}).data,
-            "transaction": WalletTransactionSerializer(tx).data,
-            "wallet": WalletSerializer(wallet).data,
-        }, status=status.HTTP_201_CREATED)
-
-
 class ReturnBookAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -773,9 +711,9 @@ class ReturnBookAPIView(APIView):
 
             book = Book.objects.select_for_update().get(pk=borrowing.book_id)
             if borrowing.book_copy_id:
-                BookCopy.objects.filter(pk=borrowing.book_copy_id, is_sold=False).update(is_available=True)
+                BookCopy.objects.filter(pk=borrowing.book_copy_id).update(is_available=True)
             else:
-                unavailable_copy = BookCopy.objects.filter(book=book, is_available=False, is_sold=False).order_by('id').first()
+                unavailable_copy = BookCopy.objects.filter(book=book, is_available=False).order_by('id').first()
                 if unavailable_copy:
                     unavailable_copy.is_available = True
                     unavailable_copy.save(update_fields=['is_available'])
@@ -975,10 +913,6 @@ class UserDashboardAPIView(APIView):
             .order_by('-datetime_created')
         )
         comments_count = len(user_comments)
-        avg_rating_val = (
-            round(sum(c.rating for c in user_comments) / comments_count, 1)
-            if comments_count > 0 else None
-        )
 
         # Build chronological activity timeline
         activity_timeline = []
@@ -1025,9 +959,8 @@ class UserDashboardAPIView(APIView):
                     'timestamp': c.datetime_created.isoformat(),
                     'book_id': c.book_id,
                     'book_title': c.book.title,
-                    'rating': c.rating,
                     'text': c.text,
-                    'description': f"ثبت دیدگاه و امتیاز {c.rating} ستاره برای کتاب «{c.book.title}»",
+                    'description': f"ثبت دیدگاه برای کتاب «{c.book.title}»",
                 })
 
         activity_timeline.sort(key=lambda item: item['timestamp'], reverse=True)
@@ -1041,7 +974,6 @@ class UserDashboardAPIView(APIView):
         )
 
         wallet = ensure_user_wallet(user_obj)
-        purchased_orders = BookOrder.objects.filter(buyer=user_obj).select_related('book', 'seller', 'buyer')[:50]
         owner_earnings_total = quantize_money(
             wallet.transactions.filter(tx_type='owner_earning').aggregate(total=Sum('amount')).get('total') or ZERO
         )
@@ -1067,7 +999,6 @@ class UserDashboardAPIView(APIView):
                 'extend_fee_amount': f'{fin_settings.extend_fee_amount:.2f}',
                 'daily_late_fee': f'{fin_settings.daily_late_fee:.2f}',
             },
-            'purchased_orders': BookOrderSerializer(purchased_orders, many=True, context={'request': request}).data,
             'current_borrowings': BorrowingSerializer(current_borrowings, many=True, context={'request': request}).data,
             'borrowing_history': BorrowingSerializer(borrowing_history, many=True, context={'request': request}).data,
             'wishlist': BookListSerializer(wishlist_books, many=True, context={'request': request}).data,
@@ -1081,7 +1012,6 @@ class UserDashboardAPIView(APIView):
                 'on_time_rate': on_time_rate,
                 'late_returns_count': late_returns_count,
                 'comments_count': comments_count,
-                'average_user_rating': avg_rating_val,
             },
             'activity_timeline': activity_timeline[:40],
         })
@@ -1166,13 +1096,11 @@ class LibraryManagerStatsAPIView(APIView):
     def get(self, request):
         now = timezone.now()
         approved_copies_qs = BookCopy.objects.filter(book__approval_status='approved')
-        unsold_approved_copies_qs = approved_copies_qs.filter(is_sold=False)
         approved_titles_qs = Book.objects.filter(approval_status='approved')
-        total_copies = unsold_approved_copies_qs.count()
-        sold_copies_count = approved_copies_qs.filter(is_sold=True).count()
+        total_copies = approved_copies_qs.count()
         total_titles = approved_titles_qs.count()
         total_books = total_copies if total_copies > 0 else total_titles
-        borrowed_count = unsold_approved_copies_qs.filter(is_available=False).count()
+        borrowed_count = approved_copies_qs.filter(is_available=False).count()
         available_count = max(0, total_books - borrowed_count)
         categories = Category.objects.all()
         categories_count = categories.count()
@@ -1231,7 +1159,7 @@ class LibraryManagerStatsAPIView(APIView):
         books_qs = Book.objects.filter(approval_status='approved').select_related('category').prefetch_related('copies').order_by('-is_available', 'title')
         books_directory = []
         for b in books_qs:
-            all_copies = [c for c in b.copies.all() if not c.is_sold]
+            all_copies = list(b.copies.all())
             avail_copies = [c for c in all_copies if c.is_available]
             books_directory.append({
                 'id': b.id,
@@ -1269,7 +1197,6 @@ class LibraryManagerStatsAPIView(APIView):
             'total_titles': total_titles,
             'borrowed_count': borrowed_count,
             'available_count': available_count,
-            'sold_copies_count': sold_copies_count,
             'categories_count': categories_count,
             'pending_books_count': len(pending_books_list),
             'rejected_books_count': len(rejected_books_list),
@@ -1464,7 +1391,7 @@ class StaffQuickBorrowAPIView(APIView):
 
                 if explicit_copy_id is not None:
                     selected_copy = BookCopy.objects.select_for_update().filter(id=explicit_copy_id, book=book).first()
-                    if not selected_copy or not selected_copy.is_available or selected_copy.is_sold:
+                    if not selected_copy or not selected_copy.is_available:
                         return Response(
                             {'error': f'جلد انتخاب‌شده (شناسه #{explicit_copy_id}) از کتاب «{book.title}» در حال حاضر موجود نیست.'},
                             status=status.HTTP_400_BAD_REQUEST
@@ -1472,7 +1399,7 @@ class StaffQuickBorrowAPIView(APIView):
                 else:
                     selected_copy = (
                         BookCopy.objects.select_for_update()
-                        .filter(book=book, is_available=True, is_sold=False)
+                        .filter(book=book, is_available=True)
                         .order_by('id')
                         .first()
                     )
@@ -1480,7 +1407,7 @@ class StaffQuickBorrowAPIView(APIView):
                         active_loan = Borrowing.objects.filter(book=book, return_date__isnull=True).select_related('user').first()
                         holder = f"@{active_loan.user.username}" if active_loan and active_loan.user else "کاربران دیگر"
                         return Response(
-                            {'error': f'تمامی جلدهای کتاب «{book.title}» هم‌اکنون در امانت ({holder}) یا فروخته‌شده است و در قفسه موجود نیست.'},
+                            {'error': f'تمامی جلدهای کتاب «{book.title}» هم‌اکنون در امانت ({holder}) است و در قفسه موجود نیست.'},
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
@@ -1621,7 +1548,7 @@ class WalletDetailAPIView(APIView):
             all_txs.filter(tx_type='owner_earning').aggregate(s=Sum('amount')).get('s') or ZERO
         )
         total_spent = quantize_money(
-            all_txs.filter(tx_type__in=['purchase', 'borrow_fee', 'extend_fee', 'late_fee', 'fine_settlement', 'admin_debit']).aggregate(s=Sum('amount')).get('s') or ZERO
+            all_txs.filter(tx_type__in=['borrow_fee', 'extend_fee', 'late_fee', 'fine_settlement', 'admin_debit']).aggregate(s=Sum('amount')).get('s') or ZERO
         )
         fin_settings = get_financial_settings()
 
@@ -1674,18 +1601,6 @@ class WalletPayFinesAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-class UserOrdersListAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        purchased = BookOrder.objects.filter(buyer=request.user).select_related('book', 'seller', 'buyer')
-        sold = BookOrder.objects.filter(seller=request.user).select_related('book', 'seller', 'buyer')
-        return Response({
-            'purchased': BookOrderSerializer(purchased, many=True, context={'request': request}).data,
-            'sold': BookOrderSerializer(sold, many=True, context={'request': request}).data,
-        })
-
-
 class ManagerFinanceStatsAPIView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
@@ -1711,9 +1626,6 @@ class ManagerFinanceStatsAPIView(APIView):
         owner_payouts_total = quantize_money(
             all_txs.filter(tx_type='owner_earning').aggregate(s=Sum('amount')).get('s') or ZERO
         )
-        purchase_volume_total = quantize_money(
-            all_txs.filter(tx_type='purchase').aggregate(s=Sum('amount')).get('s') or ZERO
-        )
         borrow_fees_total = quantize_money(
             all_txs.filter(tx_type__in=['borrow_fee', 'extend_fee']).aggregate(s=Sum('amount')).get('s') or ZERO
         )
@@ -1730,24 +1642,20 @@ class ManagerFinanceStatsAPIView(APIView):
         total_users_balance = quantize_money(wallet_totals.get('total_balance') or ZERO)
         total_locked_deposits = quantize_money(wallet_totals.get('total_locked') or ZERO)
 
-        recent_orders = BookOrder.objects.select_related('book', 'buyer', 'seller')[:50]
         fin_settings = get_financial_settings()
 
         return Response({
             'summary': {
                 'platform_revenue_total': f'{platform_revenue_total:.2f}',
                 'owner_payouts_total': f'{owner_payouts_total:.2f}',
-                'purchase_volume_total': f'{purchase_volume_total:.2f}',
                 'borrow_fees_total': f'{borrow_fees_total:.2f}',
                 'late_fees_collected_total': f'{late_fees_collected_total:.2f}',
                 'unpaid_fines_total': f'{unpaid_fines_total:.2f}',
                 'total_users_balance': f'{total_users_balance:.2f}',
                 'total_locked_deposits': f'{total_locked_deposits:.2f}',
-                'total_orders_count': BookOrder.objects.count(),
             },
             'settings': FinancialSettingsSerializer(fin_settings).data,
             'transactions': WalletTransactionSerializer(filtered_txs[:100], many=True).data,
-            'orders': BookOrderSerializer(recent_orders, many=True, context={'request': request}).data,
         })
 
 
@@ -1805,7 +1713,7 @@ class SuperuserFinancialSettingsAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({
-            'message': 'تعرفه‌ها و تنظیمات مالی فروشگاه با موفقیت بروزرسانی شد.',
+            'message': 'تعرفه‌ها و تنظیمات مالی کتابخانه با موفقیت بروزرسانی شد.',
             'settings': serializer.data,
         }, status=status.HTTP_200_OK)
 

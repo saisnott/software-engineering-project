@@ -6,7 +6,6 @@ from rest_framework import status
 from .models import (
     Book,
     BookCopy,
-    BookOrder,
     Borrowing,
     Category,
     Comment,
@@ -71,8 +70,7 @@ class BookstoreAPITests(TestCase):
         """Posting a comment to /api/books/<id>/comments/ should not require 'book' in request body."""
         self.client.force_authenticate(user=self.other_user)
         res = self.client.post(f'/api/books/{self.book.id}/comments/', {
-            'text': 'کتاب فوق‌العاده‌ای بود!',
-            'does_recommend': True
+            'text': 'کتاب فوق‌العاده‌ای بود!'
         }, format='json')
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Comment.objects.count(), 1)
@@ -184,25 +182,26 @@ class BookstoreAPITests(TestCase):
         res_del = self.client.delete(f'/api/books/{self.book.id}/')
         self.assertEqual(res_del.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_star_rating_and_average_calculation(self):
+    def test_text_only_comments_without_rating_or_recommend(self):
         self.client.force_authenticate(user=self.user)
-        self.client.post(f'/api/books/{self.book.id}/comments/', {
-            'text': 'عالی',
-            'rating': 5,
-            'does_recommend': True
+        res1 = self.client.post(f'/api/books/{self.book.id}/comments/', {
+            'text': 'عالی'
         }, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
 
         self.client.force_authenticate(user=self.other_user)
-        self.client.post(f'/api/books/{self.book.id}/comments/', {
-            'text': 'خوب بود',
-            'rating': 3,
-            'does_recommend': True
+        res2 = self.client.post(f'/api/books/{self.book.id}/comments/', {
+            'text': 'خوب بود'
         }, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
 
         res = self.client.get(f'/api/books/{self.book.id}/')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data['average_rating'], 4.0)
-        self.assertEqual(res.data['ratings_count'], 2)
+        self.assertEqual(len(res.data['comments']), 2)
+        self.assertNotIn('average_rating', res.data)
+        self.assertNotIn('ratings_count', res.data)
+        self.assertNotIn('rating', res.data['comments'][0])
+        self.assertNotIn('does_recommend', res.data['comments'][0])
 
     def test_extend_borrowing_and_waitlist_reservation(self):
         # User 2 borrows the book
@@ -326,9 +325,7 @@ class BookstoreAPITests(TestCase):
 
         self.client.post(f'/api/borrowings/{borrowing_id}/extend/')
         self.client.post(f'/api/books/{self.book.id}/comments/', {
-            'text': 'کتاب بسیار آموزنده‌ای بود.',
-            'rating': 5,
-            'does_recommend': True
+            'text': 'کتاب بسیار آموزنده‌ای بود.'
         }, format='json')
 
         # Staff processes the return of the book
@@ -396,9 +393,7 @@ class BookstoreAPITests(TestCase):
         # 3. User 2 posts a comment on User 1's book -> creates comment notification for User 1
         self.client.force_authenticate(user=self.other_user)
         self.client.post(f'/api/books/{self.book.id}/comments/', {
-            'text': 'عالی بود',
-            'rating': 5,
-            'does_recommend': True
+            'text': 'عالی بود'
         }, format='json')
 
         # 4. Staff returns the book -> creates return notification for User 2 AND waitlist notification for User 1
@@ -678,7 +673,7 @@ class BookstoreAPITests(TestCase):
         self.assertEqual(self.client.post(f'/api/books/{book_id}/wishlist/').status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(self.client.post(f'/api/books/{book_id}/reserve/').status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
-            self.client.post(f'/api/books/{book_id}/comments/', {'text': 'تست', 'rating': 5}, format='json').status_code,
+            self.client.post(f'/api/books/{book_id}/comments/', {'text': 'تست'}, format='json').status_code,
             status.HTTP_400_BAD_REQUEST
         )
 
@@ -876,52 +871,6 @@ class BookstoreAPITests(TestCase):
         self.assertEqual(spoof_res.status_code, status.HTTP_200_OK)
         self.assertEqual(spoof_res.data['wallet_balance'], '160.25')
 
-    def test_book_purchase_revenue_split_and_sold_copy(self):
-        # Owner cannot buy their own book
-        self.client.force_authenticate(user=self.user)
-        self_buy = self.client.post(f'/api/books/{self.book.id}/purchase/')
-        self.assertEqual(self_buy.status_code, status.HTTP_400_BAD_REQUEST)
-
-        # Regular buyer purchases self.book ($15.50) owned by self.user
-        # 80% ($12.40) -> self.user wallet, 20% ($3.10) -> platform commission
-        self.client.force_authenticate(user=self.other_user)
-        buy_res = self.client.post(f'/api/books/{self.book.id}/purchase/')
-        self.assertEqual(buy_res.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(buy_res.data['order']['total_price'], '15.50')
-        self.assertEqual(buy_res.data['order']['order_code'], 'ORD-0001')
-        self.assertEqual(buy_res.data['transaction']['reference_code'], 'PUR-0001')
-        self.assertEqual(buy_res.data['order']['owner_share'], '12.40')
-        self.assertEqual(buy_res.data['order']['platform_commission'], '3.10')
-        self.assertEqual(buy_res.data['wallet']['balance'], '84.50')
-
-        owner_wallet = Wallet.objects.get(user=self.user)
-        self.assertEqual(owner_wallet.balance, Decimal('112.40'))
-
-        # Book copy is now marked sold and book is unavailable
-        self.book.refresh_from_db()
-        self.assertFalse(self.book.is_available)
-        sold_copy = self.book.copies.first()
-        self.assertTrue(sold_copy.is_sold)
-        self.assertFalse(sold_copy.is_available)
-
-        # Sold copy cannot be deleted and is not miscounted as borrowed in manager stats
-        self.client.force_authenticate(user=self.staff_user)
-        del_sold = self.client.delete(f'/api/books/{self.book.id}/copies/{sold_copy.id}/')
-        self.assertEqual(del_sold.status_code, status.HTTP_400_BAD_REQUEST)
-
-        stats_res = self.client.get('/api/manager/stats/')
-        self.assertEqual(stats_res.data['borrowed_count'], 0)
-        self.assertEqual(stats_res.data['sold_copies_count'], 1)
-
-        # Orders endpoint reflects buyer and seller records
-        self.client.force_authenticate(user=self.other_user)
-        orders_buyer = self.client.get('/api/orders/')
-        self.assertEqual(len(orders_buyer.data['purchased']), 1)
-
-        self.client.force_authenticate(user=self.user)
-        orders_seller = self.client.get('/api/orders/')
-        self.assertEqual(len(orders_seller.data['sold']), 1)
-
     def test_borrow_deposit_extend_and_ontime_return_wallet_flow(self):
         # self.book price = $15.50 -> borrow_fee (10%) = $1.55, deposit (50%) = $7.75
         # owner share of borrow_fee (80%) = $1.24, platform = $0.31
@@ -1001,7 +950,7 @@ class BookstoreAPITests(TestCase):
             password='password123'
         )
 
-        # Set borrower balance to $1.00 -> borrowing/buying fails atomically without altering copy
+        # Set borrower balance to $1.00 -> borrowing fails atomically without altering copy
         Wallet.objects.filter(user=self.other_user).update(balance=Decimal('1.00'))
         self.client.force_authenticate(user=self.other_user)
         fail_borrow = self.client.post(f'/api/books/{self.book.id}/borrow/')
@@ -1010,10 +959,6 @@ class BookstoreAPITests(TestCase):
         self.book.refresh_from_db()
         self.assertTrue(self.book.is_available)
         self.assertFalse(Borrowing.objects.filter(book=self.book).exists())
-
-        fail_buy = self.client.post(f'/api/books/{self.book.id}/purchase/')
-        self.assertEqual(fail_buy.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(BookOrder.objects.exists())
 
         # Staff can view manager finance report, but cannot adjust wallets or change settings
         self.client.force_authenticate(user=self.staff_user)

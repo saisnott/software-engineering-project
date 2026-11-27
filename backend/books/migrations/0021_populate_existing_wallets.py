@@ -41,7 +41,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('accounts', '0001_initial'),
-        ('books', '0020_financialsettings_bookcopy_is_sold_and_more'),
+        ('books', '0020_financialsettings_wallet_and_borrowing_fees'),
     ]
 
     operations = [

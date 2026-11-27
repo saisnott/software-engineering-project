@@ -22,9 +22,4 @@ class Migration(migrations.Migration):
             name='is_extended',
             field=models.BooleanField(default=False),
         ),
-        migrations.AddField(
-            model_name='comment',
-            name='rating',
-            field=models.PositiveSmallIntegerField(default=5),
-        ),
     ]

@@ -9,7 +9,6 @@ import {
   Receipt,
   CheckCircle,
   AlertCircle,
-  ShoppingBag,
   Sparkles,
   ShieldAlert,
   ArrowUpRight,
@@ -27,24 +26,18 @@ export const WalletPage = () => {
   const { showToast, refreshNotifications } = useNotifications();
 
   const [walletData, setWalletData] = useState(null);
-  const [ordersData, setOrdersData] = useState({ purchased: [], sold: [] });
   const [loading, setLoading] = useState(true);
   const [topupAmount, setTopupAmount] = useState('50');
   const [submittingTopup, setSubmittingTopup] = useState(false);
   const [payingFines, setPayingFines] = useState(false);
   const [txFilter, setTxFilter] = useState('all');
-  const [orderTab, setOrderTab] = useState('purchased');
   const [feedback, setFeedback] = useState(null);
   const [lastReceipt, setLastReceipt] = useState(null);
 
   const fetchWalletAll = useCallback(async () => {
     try {
-      const [walletRes, ordersRes] = await Promise.all([
-        api.get('/api/wallet/'),
-        api.get('/api/orders/'),
-      ]);
+      const walletRes = await api.get('/api/wallet/');
       setWalletData(walletRes.data);
-      setOrdersData(ordersRes.data || { purchased: [], sold: [] });
     } catch (err) {
       console.error('Error loading wallet data', err);
     } finally {
@@ -113,14 +106,11 @@ export const WalletPage = () => {
     if (txFilter === 'all') return true;
     if (txFilter === 'topup') return ['topup', 'signup_bonus', 'admin_credit'].includes(tx.tx_type);
     if (txFilter === 'earning') return tx.tx_type === 'owner_earning';
-    if (txFilter === 'purchase') return tx.tx_type === 'purchase';
     if (txFilter === 'borrow') return ['borrow_fee', 'extend_fee'].includes(tx.tx_type);
     if (txFilter === 'deposit') return ['deposit_lock', 'deposit_release'].includes(tx.tx_type);
     if (txFilter === 'fine') return ['late_fee', 'fine_settlement'].includes(tx.tx_type);
     return true;
   });
-
-  const activeOrders = orderTab === 'purchased' ? (ordersData.purchased || []) : (ordersData.sold || []);
 
   return (
     <div className="container">
@@ -129,11 +119,9 @@ export const WalletPage = () => {
         <div>
           <h1 style={{ fontSize: '28px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
             <Wallet size={28} color="var(--success)" />
-            کیف‌پول و امور مالی من
+            کیف‌پول
           </h1>
-          <p style={{ color: 'var(--text-dim)', fontSize: '14.5px' }}>
-            شارژ شبیه‌سازی‌شده کیف‌پول، پیگیری ودیعه امانت‌ها، درآمد از کتاب‌های ثبت‌شده و تاریخچه تراکنش‌ها
-          </p>
+
         </div>
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
@@ -159,7 +147,7 @@ export const WalletPage = () => {
           <div>
             <strong>کیف‌پول شما توسط مدیریت مسدود شده است.</strong>
             <div style={{ fontSize: '13px' }}>
-              تا زمان رفع مسدودی توسط مدیر ارشد، امکان شارژ، خرید یا امانت کتاب وجود ندارد.
+              تا زمان رفع مسدودی توسط مدیر ارشد، امکان شارژ یا امانت کتاب وجود ندارد.
             </div>
           </div>
         </div>
@@ -187,7 +175,7 @@ export const WalletPage = () => {
                 شما مبلغ {formatPrice(unpaidFines)} جریمه دیرکرد تسویه‌نشده دارید
               </div>
               <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
-                برای ادامه امانت‌گیری یا خرید کتاب‌های جدید، لطفاً جریمه خود را از محل موجودی کیف‌پول تسویه کنید.
+                برای ادامه امانت‌گیری کتاب‌های جدید، لطفاً جریمه خود را از محل موجودی کیف‌پول تسویه کنید.
               </div>
             </div>
           </div>
@@ -215,7 +203,7 @@ export const WalletPage = () => {
             {formatPrice(wallet.balance ?? 0)}
           </div>
           <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            آماده برای خرید، امانت و تمدید کتاب
+            آماده برای امانت و تمدید کتاب
           </div>
         </div>
 
@@ -241,7 +229,7 @@ export const WalletPage = () => {
             {formatPrice(summary.total_earnings ?? 0)}
           </div>
           <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            سهم {toPersianDigits(parseFloat(settings.owner_share_percent || 80))}٪ از فروش و امانت کتاب‌های شما
+            سهم {toPersianDigits(parseFloat(settings.owner_share_percent || 80))}٪ از امانت کتاب‌های شما
           </div>
         </div>
 
@@ -254,7 +242,7 @@ export const WalletPage = () => {
             {formatPrice(summary.total_spent ?? 0)}
           </div>
           <div style={{ fontSize: '12.5px', color: 'var(--text-dim)', marginTop: '4px' }}>
-            خریدها، امانت‌ها، تمدیدها و جریمه‌ها
+            امانت‌ها، تمدیدها و جریمه‌ها
           </div>
         </div>
       </div>
@@ -266,16 +254,12 @@ export const WalletPage = () => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <PlusCircle size={20} color="var(--success)" />
-              شارژ سریع کیف‌پول (آزمایشی)
+              شارژ کیف‌پول
             </h2>
-            <span className="badge badge-available" style={{ fontSize: '11.5px' }}>
-              واریز آنی بدون درگاه بانکی
-            </span>
+
           </div>
 
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', marginBottom: '16px' }}>
-            یکی از مبالغ آماده را انتخاب کنید یا مبلغ دلخواه خود (تا سقف {formatPrice(settings.max_topup_amount || 1000)}) را وارد نمایید.
-          </p>
+
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
             {PRESET_AMOUNTS.map((amt) => (
@@ -346,16 +330,13 @@ export const WalletPage = () => {
 
         {/* Financial Rules / Tariffs Info */}
         <div className="card" style={{ padding: '26px' }}>
-          <h2 style={{ fontSize: '19px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <Sparkles size={20} color="var(--accent2)" />
-            تعرفه‌ها و قوانین تقسیم درآمد
-          </h2>
+
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13.5px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--surface2)', borderRadius: '8px' }}>
-              <span style={{ color: 'var(--text-dim)' }}>سهم ثبت‌کننده کتاب از فروش و امانت</span>
+              <span style={{ color: 'var(--text-dim)' }}>سهم ثبت‌کننده کتاب از امانت و تمدید</span>
               <strong style={{ color: 'var(--success)' }}>
-                ٪{toPersianDigits(parseFloat(settings.owner_share_percent || 80))} (کارمزد فروشگاه: ٪{toPersianDigits(100 - parseFloat(settings.owner_share_percent || 80))})
+                ٪{toPersianDigits(parseFloat(settings.owner_share_percent || 80))} (کارمزد کتابخانه: ٪{toPersianDigits(100 - parseFloat(settings.owner_share_percent || 80))})
               </strong>
             </div>
 
@@ -382,99 +363,12 @@ export const WalletPage = () => {
         </div>
       </div>
 
-      {/* 3. My Purchases & My Book Sales */}
-      <div style={{ marginBottom: '44px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '21px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ShoppingBag size={22} color="var(--accent2)" />
-            فاکتورهای خرید و فروش کتاب
-          </h2>
-
-          <div className="tabs-pill-group">
-            <button
-              type="button"
-              className={`tab-pill-btn ${orderTab === 'purchased' ? 'active' : ''}`}
-              onClick={() => setOrderTab('purchased')}
-            >
-              خریدهای من ({toPersianDigits((ordersData.purchased || []).length)})
-            </button>
-            <button
-              type="button"
-              className={`tab-pill-btn ${orderTab === 'sold' ? 'active' : ''}`}
-              onClick={() => setOrderTab('sold')}
-            >
-              فروش کتاب‌های من ({toPersianDigits((ordersData.sold || []).length)})
-            </button>
-          </div>
-        </div>
-
-        {activeOrders.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', padding: '28px', color: 'var(--muted)' }}>
-            {orderTab === 'purchased'
-              ? 'هنوز کتابی به‌صورت دائمی خریداری نکرده‌اید.'
-              : 'هنوز هیچ‌یک از کتاب‌های ثبت‌شده شما خریداری نشده است.'}
-          </div>
-        ) : (
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="table-wrapper" tabIndex={0} role="region" aria-label="فاکتورهای خرید و فروش">
-              <table>
-                <thead>
-                  <tr>
-                    <th>کد سفارش</th>
-                    <th>کتاب</th>
-                    <th>{orderTab === 'purchased' ? 'ثبت‌کننده / فروشنده' : 'خریدار'}</th>
-                    <th>مبلغ کل</th>
-                    {orderTab === 'sold' && <th>سهم شما (واریزشده)</th>}
-                    <th>تاریخ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activeOrders.map((ord) => (
-                    <tr key={ord.id}>
-                      <td>
-                        <span className="code-mono-badge">{ord.order_code}</span>
-                      </td>
-                      <td>
-                        {ord.book ? (
-                          <Link to={`/books/${ord.book}`} style={{ fontWeight: 700, color: 'var(--text)' }}>
-                            {ord.book_title}
-                          </Link>
-                        ) : (
-                          <strong>{ord.book_title}</strong>
-                        )}
-                        {ord.copy_id && (
-                          <div style={{ fontSize: '11.5px', color: 'var(--muted)' }} dir="ltr">
-                            Copy ID: #{ord.copy_id}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>
-                          @{orderTab === 'purchased' ? ord.seller_username : ord.buyer_username}
-                        </span>
-                      </td>
-                      <td dir="ltr" style={{ fontWeight: 700 }}>{formatPrice(ord.total_price)}</td>
-                      {orderTab === 'sold' && (
-                        <td dir="ltr" style={{ fontWeight: 800, color: 'var(--success)' }}>
-                          +{formatPrice(ord.owner_share)}
-                        </td>
-                      )}
-                      <td>{formatPersianDate(ord.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 4. Full Wallet Transaction Ledger */}
+      {/* 3. Full Wallet Transaction Ledger */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
           <h2 style={{ fontSize: '21px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Receipt size={22} color="var(--accent2)" />
-            تاریخچه تراکنش‌های کیف‌پول ({toPersianDigits(filteredTransactions.length)})
+            تاریخچه تراکنش‌ ({toPersianDigits(filteredTransactions.length)})
           </h2>
 
           <div className="tabs-pill-group" style={{ flexWrap: 'wrap' }}>
@@ -482,7 +376,6 @@ export const WalletPage = () => {
               ['all', 'همه'],
               ['topup', 'شارژ و هدیه'],
               ['earning', 'درآمد من'],
-              ['purchase', 'خرید کتاب'],
               ['borrow', 'امانت و تمدید'],
               ['deposit', 'ودیعه'],
               ['fine', 'جریمه'],
@@ -537,9 +430,8 @@ export const WalletPage = () => {
                         </td>
                         <td>
                           <span
-                            className={`badge ${
-                              isPositive ? 'badge-available' : isLock ? 'badge-category' : 'badge-borrowed'
-                            }`}
+                            className={`badge ${isPositive ? 'badge-available' : isLock ? 'badge-category' : 'badge-borrowed'
+                              }`}
                           >
                             {isPositive ? <ArrowDownLeft size={12} /> : <ArrowUpRight size={12} />}
                             {tx.tx_type_label}

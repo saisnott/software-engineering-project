@@ -33,11 +33,6 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.AddField(
-            model_name='bookcopy',
-            name='is_sold',
-            field=models.BooleanField(default=False, verbose_name='فروخته\u200cشده'),
-        ),
-        migrations.AddField(
             model_name='borrowing',
             name='borrow_fee_paid',
             field=models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=10),
@@ -73,32 +68,6 @@ class Migration(migrations.Migration):
             field=models.CharField(choices=[('borrow', 'امانت کتاب'), ('return', 'تحویل کتاب'), ('waitlist', 'موجود شدن رزرو'), ('extend', 'تمدید امانت'), ('comment', 'دیدگاه جدید'), ('role', 'تغییر دسترسی'), ('reminder', 'یادآوری موعد'), ('approval', 'بررسی و تأیید کتاب'), ('wallet', 'تراکنش مالی و کیف\u200cپول'), ('info', 'اطلاعیه')], default='info', max_length=30),
         ),
         migrations.CreateModel(
-            name='BookOrder',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('order_code', models.CharField(max_length=40, unique=True)),
-                ('buyer_username_snapshot', models.CharField(blank=True, default='', max_length=150)),
-                ('seller_username_snapshot', models.CharField(blank=True, default='', max_length=150)),
-                ('book_title_snapshot', models.CharField(max_length=255)),
-                ('book_author_snapshot', models.CharField(blank=True, default='', max_length=255)),
-                ('copy_id_snapshot', models.PositiveIntegerField(blank=True, null=True)),
-                ('total_price', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('owner_share', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=10)),
-                ('platform_commission', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=10)),
-                ('status', models.CharField(choices=[('completed', 'تکمیل\u200cشده'), ('refunded', 'بازگشت وجه')], default='completed', max_length=20)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('book', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='orders', to='books.book')),
-                ('book_copy', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='orders', to='books.bookcopy')),
-                ('buyer', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='book_orders', to=settings.AUTH_USER_MODEL)),
-                ('seller', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='book_sales', to=settings.AUTH_USER_MODEL)),
-            ],
-            options={
-                'verbose_name': 'سفارش خرید کتاب',
-                'verbose_name_plural': 'سفارش\u200cهای خرید کتاب',
-                'ordering': ['-created_at'],
-            },
-        ),
-        migrations.CreateModel(
             name='Wallet',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -119,7 +88,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('reference_code', models.CharField(max_length=40, unique=True)),
-                ('tx_type', models.CharField(choices=[('signup_bonus', 'اعتبار هدیه اولیه'), ('topup', 'شارژ کیف\u200cپول'), ('purchase', 'خرید کتاب'), ('borrow_fee', 'هزینه امانت کتاب'), ('extend_fee', 'هزینه تمدید امانت'), ('deposit_lock', 'مسدودسازی ودیعه امانت'), ('deposit_release', 'آزادسازی ودیعه امانت'), ('late_fee', 'جریمه تأخیر در تحویل'), ('fine_settlement', 'تسویه جریمه معوقه'), ('owner_earning', 'درآمد فروش/امانت کتاب'), ('admin_credit', 'افزایش دستی توسط مدیر'), ('admin_debit', 'کسر دستی توسط مدیر'), ('refund', 'بازگشت وجه')], max_length=30)),
+                ('tx_type', models.CharField(choices=[('signup_bonus', 'اعتبار هدیه اولیه'), ('topup', 'شارژ کیف\u200cپول'), ('borrow_fee', 'هزینه امانت کتاب'), ('extend_fee', 'هزینه تمدید امانت'), ('deposit_lock', 'مسدودسازی ودیعه امانت'), ('deposit_release', 'آزادسازی ودیعه امانت'), ('late_fee', 'جریمه تأخیر در تحویل'), ('fine_settlement', 'تسویه جریمه معوقه'), ('owner_earning', 'درآمد امانت کتاب'), ('admin_credit', 'افزایش دستی توسط مدیر'), ('admin_debit', 'کسر دستی توسط مدیر')], max_length=30)),
                 ('direction', models.CharField(choices=[('credit', 'واریز'), ('debit', 'برداشت'), ('lock', 'بلوکه'), ('unlock', 'آزادسازی')], max_length=15)),
                 ('amount', models.DecimalField(decimal_places=2, max_digits=12)),
                 ('platform_commission', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=12)),
@@ -131,7 +100,6 @@ class Migration(migrations.Migration):
                 ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='initiated_wallet_transactions', to=settings.AUTH_USER_MODEL)),
                 ('related_book', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='wallet_transactions', to='books.book')),
                 ('related_borrowing', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='wallet_transactions', to='books.borrowing')),
-                ('related_order', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='wallet_transactions', to='books.bookorder')),
                 ('wallet', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='transactions', to='books.wallet')),
             ],
             options={

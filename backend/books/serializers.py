@@ -1,11 +1,9 @@
 from decimal import Decimal
-from django.db.models import Avg
 from django.utils import timezone
 from rest_framework import serializers
 from .models import (
     Book,
     BookCopy,
-    BookOrder,
     Borrowing,
     Category,
     Comment,
@@ -64,13 +62,8 @@ class CommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Comment
-        fields = ['id', 'user', 'username', 'book', 'text', 'rating', 'does_recommend', 'datetime_created']
+        fields = ['id', 'user', 'username', 'book', 'text', 'datetime_created']
         read_only_fields = ['id', 'user', 'book', 'datetime_created']
-
-    def validate_rating(self, value):
-        if value < 1 or value > 5:
-            raise serializers.ValidationError("امتیاز باید عددی بین ۱ تا ۵ باشد.")
-        return value
 
 
 class BookCopySerializer(serializers.ModelSerializer):
@@ -79,8 +72,8 @@ class BookCopySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BookCopy
-        fields = ['id', 'book', 'is_available', 'is_sold', 'created_at', 'current_borrower', 'current_borrowing_id']
-        read_only_fields = ['id', 'book', 'is_available', 'is_sold', 'created_at', 'current_borrower', 'current_borrowing_id']
+        fields = ['id', 'book', 'is_available', 'created_at', 'current_borrower', 'current_borrowing_id']
+        read_only_fields = ['id', 'book', 'is_available', 'created_at', 'current_borrower', 'current_borrowing_id']
 
     def _get_active_borrowing(self, obj):
         if not _can_view_borrower(self.context.get('request')):
@@ -116,14 +109,12 @@ class BookListSerializer(serializers.ModelSerializer):
     category_name = serializers.ReadOnlyField(source='category.name')
     category_slug = serializers.ReadOnlyField(source='category.slug')
     comments_count = serializers.SerializerMethodField()
-    average_rating = serializers.SerializerMethodField()
     author_username = serializers.ReadOnlyField(source='user.username')
     is_wishlisted = serializers.SerializerMethodField()
     current_borrower = serializers.SerializerMethodField()
     total_borrows_count = serializers.IntegerField(source='borrowings.count', read_only=True)
     total_copies_count = serializers.SerializerMethodField()
     available_copies_count = serializers.SerializerMethodField()
-    sold_copies_count = serializers.SerializerMethodField()
     copies = serializers.SerializerMethodField()
     approval_status_label = serializers.SerializerMethodField()
     reviewed_by_username = serializers.ReadOnlyField(source='reviewed_by.username')
@@ -135,9 +126,9 @@ class BookListSerializer(serializers.ModelSerializer):
             'approval_status', 'approval_status_label', 'rejection_reason',
             'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at',
             'category', 'category_name', 'category_slug', 'comments_count',
-            'average_rating', 'user', 'author_username', 'is_wishlisted',
+            'user', 'author_username', 'is_wishlisted',
             'current_borrower', 'total_borrows_count',
-            'total_copies_count', 'available_copies_count', 'sold_copies_count', 'copies'
+            'total_copies_count', 'available_copies_count', 'copies'
         ]
         read_only_fields = [
             'id', 'book_code', 'user', 'is_available',
@@ -152,23 +143,16 @@ class BookListSerializer(serializers.ModelSerializer):
         return f"LIB-B{obj.id:04d}"
 
     def get_total_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if not c.is_sold)
+        return len(obj.copies.all())
 
     def get_available_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if c.is_available and not c.is_sold)
-
-    def get_sold_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if c.is_sold)
+        return sum(1 for c in obj.copies.all() if c.is_available)
 
     def get_copies(self, obj):
         return BookCopySerializer(obj.copies.all(), many=True, context=self.context).data
 
     def get_comments_count(self, obj):
         return obj.comments.filter(is_active=True).count()
-
-    def get_average_rating(self, obj):
-        avg = obj.comments.filter(is_active=True).aggregate(avg_val=Avg('rating'))['avg_val']
-        return round(avg, 1) if avg is not None else None
 
     def get_is_wishlisted(self, obj):
         request = self.context.get('request')
@@ -257,8 +241,6 @@ class BookDetailSerializer(serializers.ModelSerializer):
     qr_payload = serializers.SerializerMethodField()
     category_details = CategorySerializer(source='category', read_only=True)
     comments = serializers.SerializerMethodField()
-    average_rating = serializers.SerializerMethodField()
-    ratings_count = serializers.SerializerMethodField()
     author_username = serializers.ReadOnlyField(source='user.username')
     is_borrowed_by_user = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
@@ -270,7 +252,6 @@ class BookDetailSerializer(serializers.ModelSerializer):
     borrowing_history = serializers.SerializerMethodField()
     total_copies_count = serializers.SerializerMethodField()
     available_copies_count = serializers.SerializerMethodField()
-    sold_copies_count = serializers.SerializerMethodField()
     copies = serializers.SerializerMethodField()
     copies_count = serializers.IntegerField(write_only=True, required=False, min_value=1, max_value=100, default=1)
     approval_status_label = serializers.SerializerMethodField()
@@ -284,11 +265,11 @@ class BookDetailSerializer(serializers.ModelSerializer):
             'is_available', 'approval_status', 'approval_status_label', 'rejection_reason',
             'reviewed_by', 'reviewed_by_username', 'reviewed_at', 'created_at',
             'category', 'category_details', 'user',
-            'author_username', 'comments', 'average_rating', 'ratings_count',
+            'author_username', 'comments',
             'is_borrowed_by_user', 'is_wishlisted', 'is_reserved_by_user',
             'waitlist_count', 'related_books', 'current_borrower',
             'total_borrows_count', 'borrowing_history',
-            'total_copies_count', 'available_copies_count', 'sold_copies_count', 'copies', 'copies_count',
+            'total_copies_count', 'available_copies_count', 'copies', 'copies_count',
             'financial_info'
         ]
         read_only_fields = [
@@ -305,13 +286,10 @@ class BookDetailSerializer(serializers.ModelSerializer):
         return f"LIB-B{obj.id:04d}"
 
     def get_total_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if not c.is_sold)
+        return len(obj.copies.all())
 
     def get_available_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if c.is_available and not c.is_sold)
-
-    def get_sold_copies_count(self, obj):
-        return sum(1 for c in obj.copies.all() if c.is_sold)
+        return sum(1 for c in obj.copies.all() if c.is_available)
 
     def get_financial_info(self, obj):
         fees = calculate_book_fees(obj)
@@ -331,13 +309,6 @@ class BookDetailSerializer(serializers.ModelSerializer):
     def get_comments(self, obj):
         active_comments = obj.comments.filter(is_active=True).select_related('user').order_by('-datetime_created')
         return CommentSerializer(active_comments, many=True, context=self.context).data
-
-    def get_average_rating(self, obj):
-        avg = obj.comments.filter(is_active=True).aggregate(avg_val=Avg('rating'))['avg_val']
-        return round(avg, 1) if avg is not None else None
-
-    def get_ratings_count(self, obj):
-        return obj.comments.filter(is_active=True).count()
 
     def get_is_borrowed_by_user(self, obj):
         request = self.context.get('request')
@@ -466,7 +437,7 @@ class WalletTransactionSerializer(serializers.ModelSerializer):
             'id', 'reference_code', 'username', 'tx_type', 'tx_type_label',
             'direction', 'direction_label', 'amount', 'platform_commission',
             'balance_before', 'balance_after', 'description',
-            'related_book', 'book_title', 'related_borrowing', 'related_order',
+            'related_book', 'book_title', 'related_borrowing',
             'created_by', 'created_by_username', 'created_at'
         ]
         read_only_fields = fields
@@ -475,46 +446,4 @@ class WalletTransactionSerializer(serializers.ModelSerializer):
         if obj.related_book:
             return obj.related_book.title
         return obj.book_title_snapshot or ''
-
-
-class BookOrderSerializer(serializers.ModelSerializer):
-    buyer_username = serializers.SerializerMethodField()
-    seller_username = serializers.SerializerMethodField()
-    book_title = serializers.SerializerMethodField()
-    book_author = serializers.SerializerMethodField()
-    book_cover = serializers.SerializerMethodField()
-    copy_id = serializers.SerializerMethodField()
-    status_label = serializers.CharField(source='get_status_display', read_only=True)
-
-    class Meta:
-        model = BookOrder
-        fields = [
-            'id', 'order_code', 'buyer', 'buyer_username', 'seller', 'seller_username',
-            'book', 'book_title', 'book_author', 'book_cover', 'copy_id',
-            'total_price', 'owner_share', 'platform_commission',
-            'status', 'status_label', 'created_at'
-        ]
-        read_only_fields = fields
-
-    def get_buyer_username(self, obj):
-        return obj.buyer.username if obj.buyer else (obj.buyer_username_snapshot or 'کاربر حذف‌شده')
-
-    def get_seller_username(self, obj):
-        return obj.seller.username if obj.seller else (obj.seller_username_snapshot or 'کتابخانه مرکزی')
-
-    def get_book_title(self, obj):
-        return obj.book.title if obj.book else obj.book_title_snapshot
-
-    def get_book_author(self, obj):
-        return obj.book.author if obj.book else obj.book_author_snapshot
-
-    def get_book_cover(self, obj):
-        if obj.book and obj.book.covers:
-            request = self.context.get('request')
-            url = obj.book.covers.url
-            return request.build_absolute_uri(url) if request else url
-        return None
-
-    def get_copy_id(self, obj):
-        return obj.book_copy_id or obj.copy_id_snapshot
 

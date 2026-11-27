@@ -609,17 +609,17 @@ export const HomePage = () => {
             <div>
               <div className="hero-badge">
                 <Sparkles size={15} />
-                <span>نسل نوین کتابخانه دیجیتال، امانت و خرید آنلاین کتاب</span>
+                <span>نسل نوین کتابخانه دیجیتال و امانت آنلاین کتاب</span>
               </div>
 
               <h1 className="hero-title">
                 <span className="hero-reveal-line">دنیایی از کتاب‌های ماندگار، آماده</span>{' '}
-                <span className="hero-reveal-line hero-title-highlight">امانت، خرید و مطالعه شما</span>
+                <span className="hero-reveal-line hero-title-highlight">امانت و مطالعه شما</span>
               </h1>
 
               <p className="hero-subtitle">
                 در کتاب‌سرا به مجموعه‌ای غنی از کتاب‌های منتخب دسترسی داشته باشید، کتاب دلخواهتان را
-                برای ۱۴ روز امانت بگیرید یا نسخه آن را به‌صورت دائمی خریداری کنید و دیدگاه‌های خود را با جامعه کتاب‌خوان‌ها به اشتراک بگذارید.
+                برای ۱۴ روز امانت بگیرید، در صورت نیاز تمدید کنید و دیدگاه‌های خود را با جامعه کتاب‌خوان‌ها به اشتراک بگذارید.
               </p>
 
               {/* Quick Search Bar */}
@@ -702,7 +702,7 @@ export const HomePage = () => {
                 <div className="hero-showcase-stage">
                   <div className="hero-floating-chip hero-floating-chip-gsap chip-top">
                     <CheckCircle2 size={18} color="var(--success)" />
-                    <span>امانت ۱۴ روزه یا خرید دائمی</span>
+                    <span>امانت ۱۴ روزه + تمدید آنلاین</span>
                   </div>
 
                   <div className="hero-floating-chip hero-floating-chip-gsap chip-bottom">
@@ -930,9 +930,9 @@ export const HomePage = () => {
 
               <div className="step-card gsap-step-card spotlight-card" onPointerMove={handleSpotlightMove}>
                 <div className="step-number">{toPersianDigits(2)}</div>
-                <h3 style={{ fontSize: '18px', marginBottom: '8px', position: 'relative', zIndex: 1 }}>امانت ۱۴ روزه یا خرید دائمی</h3>
+                <h3 style={{ fontSize: '18px', marginBottom: '8px', position: 'relative', zIndex: 1 }}>امانت ۱۴ روزه با ودیعه قابل برگشت</h3>
                 <p style={{ color: 'var(--text-dim)', fontSize: '13.5px', position: 'relative', zIndex: 1 }}>
-                  کتاب را برای ۱۴ روز (با ودیعه قابل برگشت) به امانت بگیرید یا نسخه آن را به‌صورت دائمی از طریق کیف‌پول حساب کاربری خریداری کنید؛ در صورت تکمیل ظرفیت نیز می‌توانید وارد صف رزرو شوید.
+                  کتاب را برای ۱۴ روز (با ودیعه قابل برگشت) از طریق کیف‌پول حساب کاربری به امانت بگیرید؛ در صورت تکمیل ظرفیت نیز می‌توانید وارد صف رزرو شوید.
                 </p>
               </div>
 
@@ -940,7 +940,7 @@ export const HomePage = () => {
                 <div className="step-number">{toPersianDigits(3)}</div>
                 <h3 style={{ fontSize: '18px', marginBottom: '8px', position: 'relative', zIndex: 1 }}>تمدید، تحویل و ثبت تجربه</h3>
                 <p style={{ color: 'var(--text-dim)', fontSize: '13.5px', position: 'relative', zIndex: 1 }}>
-                  مهلت مطالعه را تا ۷ روز تمدید کنید، پس از تحویل کتاب ودیعه خود را به‌صورت خودکار در کیف‌پول پس بگیرید و نقد و امتیازتان را ثبت کنید.
+                  مهلت مطالعه را تا ۷ روز تمدید کنید، پس از تحویل کتاب ودیعه خود را به‌صورت خودکار در کیف‌پول پس بگیرید و دیدگاه و تجربه‌تان را ثبت کنید.
                 </p>
               </div>
             </div>
@@ -982,7 +982,7 @@ export const HomePage = () => {
               <Wallet size={34} color="var(--accent2)" style={{ margin: '0 auto 14px', position: 'relative', zIndex: 1 }} />
               <h3 style={{ fontSize: '18px', marginBottom: '8px', position: 'relative', zIndex: 1 }}>کیف‌پول یکپارچه حساب کاربری</h3>
               <p style={{ color: 'var(--text-dim)', fontSize: '13.5px', position: 'relative', zIndex: 1 }}>
-                پرداخت آسان برای خرید یا امانت کتاب، آزادسازی خودکار ودیعه پس از تحویل و دسترسی کامل به تاریخچه و کد پیگیری تراکنش‌ها.
+                پرداخت آسان هزینه امانت و تمدید کتاب، آزادسازی خودکار ودیعه پس از تحویل و دسترسی کامل به تاریخچه و کد پیگیری تراکنش‌ها.
               </p>
             </div>
           </div>
@@ -997,7 +997,7 @@ export const HomePage = () => {
               کتاب ارزشمندی می‌شناسید که جای آن در کتابخانه خالی است؟
             </h2>
             <p style={{ color: 'var(--text-dim)', fontSize: '14.5px' }}>
-              همین حالا آن را با تصویر جلد و مشخصات کامل ثبت کنید؛ پس از بررسی و تأیید مدیریت در کاتالوگ منتشر می‌شود و درآمد حاصل از امانت یا فروش آن نیز به کیف‌پول شما تعلق می‌گیرد.
+              همین حالا آن را با تصویر جلد و مشخصات کامل ثبت کنید؛ پس از بررسی و تأیید مدیریت در کاتالوگ منتشر می‌شود و درآمد حاصل از امانت آن نیز به کیف‌پول شما تعلق می‌گیرد.
             </p>
           </div>
 

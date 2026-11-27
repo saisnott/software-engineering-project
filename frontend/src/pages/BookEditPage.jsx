@@ -427,9 +427,7 @@ export const BookEditPage = () => {
                   <strong style={{ fontSize: '14px', color: 'var(--text)' }} dir="ltr">
                     ID: #{copyItem.id}
                   </strong>
-                  {copyItem.is_sold ? (
-                    <span className="badge badge-category">فروخته‌شده</span>
-                  ) : copyItem.is_available ? (
+                  {copyItem.is_available ? (
                     <span className="badge badge-available">موجود در قفسه</span>
                   ) : (
                     <span className="badge badge-borrowed">
@@ -438,7 +436,7 @@ export const BookEditPage = () => {
                   )}
                 </div>
 
-                {!copyItem.is_sold && copyItem.is_available && copies.filter((c) => !c.is_sold).length > 1 && (
+                {copyItem.is_available && copies.length > 1 && (
                   <button
                     type="button"
                     onClick={() => handleDeleteCopy(copyItem.id)}

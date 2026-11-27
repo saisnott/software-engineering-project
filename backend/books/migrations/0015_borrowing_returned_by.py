@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('books', '0014_book_waitlist_borrowing_is_extended_comment_rating'),
+        ('books', '0014_book_waitlist_borrowing_is_extended'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

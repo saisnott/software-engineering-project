@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('books', '0007_comment_does_recommend_comment_is_active'),
+        ('books', '0007_comment_is_active'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

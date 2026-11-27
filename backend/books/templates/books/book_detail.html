@@ -219,18 +219,6 @@
             <span class="small text-muted"><i class="bi bi-clock me-1"></i>{{ comment.datetime_created|date:"Y-m-d H:i" }}</span>
           </div>
 
-          <div class="mb-3">
-            {% if comment.does_recommend %}
-              <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1" style="font-size:11px;">
-                <i class="bi bi-hand-thumbs-up-fill me-1"></i> Recommends this book
-              </span>
-            {% else %}
-              <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1" style="font-size:11px;">
-                <i class="bi bi-hand-thumbs-down-fill me-1"></i> Does not recommend
-              </span>
-            {% endif %}
-          </div>
-
           <div class="comment-text text-white-50 fs-6 ps-1">
             {{ comment.text|linebreaks }}
           </div>
@@ -249,13 +237,6 @@
             {% csrf_token %}
 
             <textarea name="text" rows="3" class="comment-textarea mb-3" placeholder="Write your transparent feedback or thoughts here..." required></textarea>
-
-            <div class="form-check mb-3">
-              <input type="checkbox" name="does_recommend" value="true" id="recommendCheck" class="form-check-input">
-              <label for="recommendCheck" class="form-check-label small text-white-50" style="cursor: pointer;">
-                I highly recommend this book to others
-              </label>
-            </div>
 
             <button type="submit" class="btn btn-warning px-4 text-dark fw-bold btn-custom-action" style="background: var(--accent2); border:none;">
               <i class="bi bi-send-fill"></i> Post Comment

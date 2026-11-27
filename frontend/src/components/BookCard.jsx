@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Book as BookIcon, MessageSquare, Heart, ArrowUpLeft, Star, Clock, XCircle } from 'lucide-react';
+import { Book as BookIcon, MessageSquare, Heart, ArrowUpLeft, Clock, XCircle } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice, toPersianDigits } from '../utils/formatters';
@@ -79,10 +79,6 @@ export const BookCard = ({ book, onWishlistChange }) => {
                 ? `موجود در قفسه (${toPersianDigits(book.available_copies_count)} از ${toPersianDigits(book.total_copies_count)})`
                 : 'موجود در قفسه'}
             </span>
-          ) : book.total_copies_count === 0 && book.sold_copies_count > 0 ? (
-            <span className="badge badge-borrowed" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
-              ناموجود (فروخته شده)
-            </span>
           ) : (
             <span className="badge badge-borrowed" style={{ backdropFilter: 'blur(8px)', background: 'var(--surface-glass)' }}>
               {book.total_copies_count > 1
@@ -122,23 +118,6 @@ export const BookCard = ({ book, onWishlistChange }) => {
             <span className="badge badge-category">{book.category_name}</span>
           ) : (
             <span />
-          )}
-
-          {book.average_rating && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '12.5px',
-                fontWeight: 700,
-                color: 'var(--accent2)'
-              }}
-              title="میانگین امتیاز کاربران"
-            >
-              <Star size={13} fill="var(--accent2)" color="var(--accent2)" />
-              {toPersianDigits(book.average_rating)}
-            </span>
           )}
         </div>
 
